@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!-- (c) Dr. Ralf Korell -->
+<!-- Galerist — Kiosk-Anzeige (Vollbild-Bilddarstellung) -->
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Galerist</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="kiosk">
+    <div id="image-container">
+        <img id="current-image" src="" alt="">
+    </div>
+
+    <div id="overlay" class="hidden">
+        <div id="overlay-artist"></div>
+        <div id="overlay-title"></div>
+        <div id="overlay-details"></div>
+        <div id="overlay-counter"></div>
+    </div>
+
+    <script src="/static/js/display.js"></script>
+</body>
+</html>

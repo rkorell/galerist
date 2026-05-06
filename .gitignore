@@ -1,0 +1,28 @@
+# Bildersammlung (~644 MB)
+galerie/
+
+# Credentials & Config
+app/config.json
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# Python
+__pycache__/
+*.py[codz]
+
+# Generierte Caches
+app/metadata_cache.json
+
+# Crawler komplett (Korell-Infrastruktur, gehört nicht in public Repo)
+crawler/
+
+# Testdaten
+app/exif_test/
+
+# Temp / Editor
+*.tmp
+*.swp
+*~
+*.log

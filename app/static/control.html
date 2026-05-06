@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<!-- (c) Dr. Ralf Korell, 2026 -->
+<!-- Galerist — Web-App: Steuerung und Einstellungen -->
+<!-- Modified: 2026-04-13, 22:30 - Windrose zurück, Filmstreifen separat, Slider fix -->
+<!-- Modified: 2026-04-17, 13:00 - Restart-Button -->
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Galerist</title>
+    <style>
+        /* === CSS Variables / Theme === */
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a25;
+            --text-primary: #f0f0f5;
+            --text-secondary: #a0a0b0;
+            --text-muted: #606070;
+            --accent: #4a90d9;
+            --accent-glow: rgba(74, 144, 217, 0.3);
+            --border-color: #2a2a3a;
+            --shadow-color: rgba(0, 0, 0, 0.5);
+            --transition-fast: 0.15s ease;
+            --transition-normal: 0.25s ease;
+        }
+        [data-theme="light"] {
+            --bg-primary: #f5f5f8;
+            --bg-secondary: #e8e8ed;
+            --bg-card: #ffffff;
+            --text-primary: #1a1a25;
+            --text-secondary: #505060;
+            --text-muted: #909098;
+            --border-color: #d0d0d8;
+            --shadow-color: rgba(0, 0, 0, 0.15);
+        }
+
+        /* === Base === */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { font-size: 16px; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* === Header === */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 0.75rem 1rem;
+            display: flex; align-items: center; justify-content: space-between;
+            box-shadow: 0 2px 10px var(--shadow-color);
+        }
+        .logo { display: flex; align-items: center; gap: 0.5rem; }
+        .logo img { height: 62px; width: 96px; }
+        .logo-text { font-size: 1.25rem; font-weight: 700; color: var(--text-secondary); letter-spacing: 2px; }
+        .theme-toggle {
+            background: var(--bg-card); border: 1px solid var(--border-color);
+            border-radius: 50%; width: 40px; height: 40px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; font-size: 1.1rem; transition: all var(--transition-fast);
+        }
+        .theme-toggle:active { transform: scale(0.95); }
+
+        /* === Main === */
+        .main {
+            flex: 1; display: flex; flex-direction: column; align-items: center;
+            padding: 1.25rem 1rem; gap: 1.25rem;
+            max-width: 480px; margin: 0 auto; width: 100%;
+        }
+
+        /* === Windrose (Kreuz) === */
+        .windrose {
+            display: grid;
+            grid-template-areas:
+                ".    up    ."
+                "left .     right"
+                ".    down  .";
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            width: 280px;
+        }
+        .wr-btn {
+            width: 80px; height: 80px; font-size: 1.8rem;
+            border: 2px solid var(--border-color); border-radius: 16px;
+            background: var(--bg-card); color: var(--text-primary);
+            cursor: pointer; -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column;
+            transition: all var(--transition-fast);
+            box-shadow: 0 2px 8px var(--shadow-color);
+            justify-self: center;
+        }
+        .wr-btn:active {
+            background: var(--accent); border-color: var(--accent);
+            transform: scale(0.95); box-shadow: 0 0 15px var(--accent-glow);
+        }
+        .wr-up    { grid-area: up; }
+        .wr-left  { grid-area: left; }
+        .wr-right { grid-area: right; }
+        .wr-down  { grid-area: down; }
+        .wr-label {
+            font-size: 0.55rem; color: var(--text-muted);
+            margin-top: 2px; pointer-events: none;
+        }
+
+        /* === Filmstreifen === */
+        .filmstrip {
+            display: flex; align-items: center; justify-content: center;
+            gap: 6px; width: 100%; overflow: hidden;
+            padding: 4px 0;
+        }
+        .filmstrip-thumb {
+            width: 80px; height: 45px;
+            object-fit: cover; border-radius: 6px;
+            border: 2px solid var(--border-color);
+            opacity: 0.5; transition: all var(--transition-normal);
+            flex-shrink: 0;
+        }
+        .filmstrip-thumb.active {
+            width: 120px; height: 68px;
+            opacity: 1; border-color: var(--accent);
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+
+        /* === Bildinfo === */
+        .preview-info {
+            text-align: center; font-size: 0.85rem;
+            color: var(--text-secondary); line-height: 1.4;
+        }
+
+        /* === Einstellungen === */
+        .settings-card {
+            width: 100%; background: var(--bg-card);
+            border-radius: 16px; border: 1px solid var(--border-color);
+            overflow: hidden; box-shadow: 0 2px 10px var(--shadow-color);
+        }
+        .settings-header {
+            padding: 1rem 1.25rem; font-size: 0.95rem; font-weight: 600;
+            color: var(--text-secondary); cursor: pointer;
+            display: flex; align-items: center; justify-content: space-between;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .settings-header::after { content: '\25BC'; font-size: 0.7rem; transition: transform var(--transition-normal); }
+        .settings-card[open] .settings-header::after { transform: rotate(180deg); }
+        .settings-body { padding: 0 1.25rem 1.25rem; }
+        .settings-card:not([open]) .settings-body { display: none; }
+
+        .field { margin-bottom: 1.25rem; }
+        .field:last-child { margin-bottom: 0; }
+        .field-label {
+            display: block; font-size: 0.8rem; color: var(--text-muted);
+            margin-bottom: 0.4rem; font-weight: 500;
+        }
+        .field-value {
+            font-size: 1.1rem; font-weight: 600; color: var(--text-primary);
+            text-align: center; margin-bottom: 0.3rem;
+        }
+        .field-input {
+            width: 100%; padding: 0.75rem 1rem;
+            border: 1px solid var(--border-color); border-radius: 12px;
+            background: var(--bg-secondary); color: var(--text-primary);
+            font-size: 1rem; -webkit-appearance: none; appearance: none;
+        }
+        .field-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+        /* Slider */
+        input[type="range"] {
+            -webkit-appearance: none; appearance: none;
+            width: 100%; height: 8px; border-radius: 4px;
+            background: var(--bg-secondary); outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 28px; height: 28px; border-radius: 50%;
+            background: var(--accent); cursor: pointer;
+            box-shadow: 0 2px 6px var(--shadow-color);
+        }
+
+        .slider-row { display: flex; gap: 0.75rem; align-items: flex-end; }
+        .slider-row .field { flex: 1; }
+
+        .field-row { display: flex; gap: 0.75rem; }
+        .field-row .field { flex: 1; }
+
+        .btn {
+            width: 100%; padding: 0.85rem; border: none; border-radius: 12px;
+            font-size: 0.95rem; font-weight: 600; cursor: pointer;
+            -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+            transition: all var(--transition-fast);
+        }
+        .btn:active { transform: scale(0.98); }
+        .btn-primary {
+            background: linear-gradient(145deg, var(--accent), #3a7bc8);
+            color: white; box-shadow: 0 2px 10px var(--accent-glow); margin-bottom: 0.5rem;
+        }
+        .btn-secondary {
+            background: var(--bg-secondary); color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        .btn-danger {
+            background: linear-gradient(145deg, #d94a4a, #c83a3a);
+            color: white; box-shadow: 0 2px 10px rgba(217, 74, 74, 0.3);
+        }
+
+        /* === Status === */
+        .status { font-size: 0.8rem; color: var(--text-muted); text-align: center; min-height: 1.25rem; }
+        .status.ok { color: var(--accent); }
+
+        /* === Footer === */
+        .footer {
+            text-align: center; padding: 1rem; color: var(--text-muted);
+            font-size: 0.75rem; border-top: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="logo">
+            <img src="/static/rk_wolf.png" alt="RK" onerror="this.style.display='none'">
+            <span class="logo-text">GALERIST</span>
+        </div>
+        <button id="theme-toggle" class="theme-toggle" title="Theme wechseln"></button>
+    </header>
+
+    <main class="main">
+        <!-- Windrose: 4 Pfeile als Kreuz -->
+        <div class="windrose">
+            <button class="wr-btn wr-up" data-action="info_on">
+                &#9650;<span class="wr-label">Info</span>
+            </button>
+            <button class="wr-btn wr-left" data-action="prev">
+                &#9664;<span class="wr-label">Zurück</span>
+            </button>
+            <button class="wr-btn wr-right" data-action="next">
+                &#9654;<span class="wr-label">Weiter</span>
+            </button>
+            <button class="wr-btn wr-down" data-action="info_off">
+                &#9660;<span class="wr-label">Info aus</span>
+            </button>
+        </div>
+
+        <!-- Filmstreifen -->
+        <div class="filmstrip" id="filmstrip">
+            <img class="filmstrip-thumb" src="" alt="">
+            <img class="filmstrip-thumb" src="" alt="">
+            <img class="filmstrip-thumb active" src="" alt="">
+            <img class="filmstrip-thumb" src="" alt="">
+            <img class="filmstrip-thumb" src="" alt="">
+        </div>
+
+        <!-- Bildinfo -->
+        <div id="preview-info" class="preview-info"></div>
+
+        <!-- Einstellungen -->
+        <details class="settings-card" id="settings-card">
+            <summary class="settings-header">Einstellungen</summary>
+            <div class="settings-body">
+                <div class="field">
+                    <span class="field-label">Anzeigedauer</span>
+                    <div class="field-value" id="interval-display">2 Min</div>
+                    <div class="slider-row">
+                        <div class="field">
+                            <span class="field-label">Stunden</span>
+                            <input type="range" id="setting-interval-h" min="0" max="10" step="1" value="0">
+                        </div>
+                        <div class="field">
+                            <span class="field-label">Minuten</span>
+                            <input type="range" id="setting-interval-m" min="0" max="59" step="1" value="2">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <span class="field-label">Overlay-Dauer</span>
+                    <div class="field-value" id="overlay-display">10 Sek</div>
+                    <input type="range" id="setting-overlay-duration" min="3" max="60" step="1" value="10">
+                </div>
+
+                <div class="field-row">
+                    <div class="field">
+                        <span class="field-label">Einschaltzeit</span>
+                        <input type="time" class="field-input" id="setting-on-time">
+                    </div>
+                    <div class="field">
+                        <span class="field-label">Ausschaltzeit</span>
+                        <input type="time" class="field-input" id="setting-off-time">
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" id="btn-save-settings">Speichern</button>
+                <button class="btn btn-secondary" id="btn-refresh-metadata">Metadaten aktualisieren</button>
+                <button class="btn btn-danger" id="btn-restart" style="margin-top: 0.5rem">Service neu starten</button>
+            </div>
+        </details>
+
+        <div id="status-message" class="status"></div>
+    </main>
+
+    <footer class="footer">&copy; Dr. Ralf Korell 2026</footer>
+
+    <script src="/static/js/control.js"></script>
+</body>
+</html>

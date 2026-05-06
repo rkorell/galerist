@@ -1,0 +1,24 @@
+# (c) Dr. Ralf Korell
+# Galerist — systemd Service (Flask + Chromium Kiosk)
+# Modified: 2026-04-13, 20:05 - Erstellt
+# Modified: 2026-04-13, 23:00 - User-Service für Wayland/Chromium
+# Modified: 2026-04-13, 23:30 - Umstellung auf System-Service
+
+[Unit]
+Description=Galerist Digital Art Frame
+After=graphical.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/galerist
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+ExecStart=/usr/bin/python3 /home/pi/galerist/galerist.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target
