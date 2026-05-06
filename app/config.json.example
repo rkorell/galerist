@@ -1,0 +1,14 @@
+{
+    "image_directory": "/path/to/your/jpegs",
+    "metadata_cache_file": "/path/to/metadata_cache.json",
+    "display_interval_seconds": 120,
+    "overlay_duration_seconds": 10,
+    "operating_hours": {
+        "on_time": "07:00",
+        "off_time": "23:00"
+    },
+    "flask_host": "0.0.0.0",
+    "flask_port": 5000,
+    "input_device": null,
+    "log_level": "INFO"
+}

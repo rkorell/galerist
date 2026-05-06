@@ -21,15 +21,26 @@ galerist/
 
 ## Voraussetzungen
 
-- Linux mit Wayland-Compositor (z.B. `labwc`)
+- Linux mit Display-Server (Wayland **oder** X11) — `display_control.py` erkennt automatisch und nutzt `wlr-randr` bzw. `xrandr`
 - Python 3.11+, Flask, libevdev (System + Python-Binding), Pillow
-- Chromium, `wlr-randr`
+- Chromium
 - `bluez` — nur falls eine BT-Fernbedienung genutzt werden soll
 - Optional für die Diagnose: `evtest`
 
 ## Konfiguration
 
-`app/config.json` liest die App beim Start. Datei ist nicht im Repo (gitignore) — anhand der Felder, die `config.py` und `galerist.py` referenzieren, selbst anlegen. Mindestens benötigt: Pfad zur Bildersammlung, Anzeige-Intervall, Flask-Bind, optional Betriebszeiten und ein expliziter `input_device`-Pfad als Override für die Auto-Erkennung.
+`app/config.json.example` als Vorlage nach `app/config.json` kopieren und anpassen. `config.json` selbst ist per `.gitignore` ausgeschlossen.
+
+| Feld | Bedeutung |
+|---|---|
+| `image_directory` | absoluter Pfad zur JPEG-Sammlung |
+| `metadata_cache_file` | Pfad für den persistierten XMP/IPTC-Cache |
+| `display_interval_seconds` | Wartezeit zwischen Bildwechseln |
+| `overlay_duration_seconds` | wie lange das Metadaten-Overlay sichtbar ist |
+| `operating_hours` | Display-Zeiten `on_time`/`off_time` (HH:MM, leer = immer an) |
+| `flask_host`, `flask_port` | Bind-Adresse + Port der Web-App |
+| `input_device` | `null` = Auto-Erkennung; expliziter `/dev/input/eventN` als Override |
+| `log_level` | `INFO`, `DEBUG`, `WARNING`, ... |
 
 ## Service
 
