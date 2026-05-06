@@ -44,7 +44,12 @@ galerist/
 
 ## Service
 
-`app/systemd/galerist.service` als Vorlage — vor dem Aktivieren `WorkingDirectory`, `ExecStart`, `User`, `Environment` an die eigene Umgebung anpassen. Pflicht: `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<UID>/bus` setzen, sonst kommt Chromium nicht ans Wayland-Display.
+`app/systemd/galerist.service` als Vorlage — vor dem Aktivieren `WorkingDirectory`, `ExecStart`, `User`, `Environment` an die eigene Umgebung anpassen.
+
+Wenn der Service als System-Service (nicht als User-Service) läuft, muss die Anbindung an die laufende Display-Session über `Environment=` gesetzt werden — sonst startet Chromium ohne sichtbares Fenster. Welche Variablen nötig sind, hängt vom Display-Server ab:
+
+- **Wayland:** `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<UID>/bus` (und i.d.R. `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`)
+- **X11:** `DISPLAY=:0` und `XAUTHORITY=/home/<user>/.Xauthority`
 
 ## Bluetooth-Fernbedienung (optional)
 
