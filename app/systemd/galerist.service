@@ -3,11 +3,12 @@
 # Modified: 2026-04-13, 20:05 - Erstellt
 # Modified: 2026-04-13, 23:00 - User-Service für Wayland/Chromium
 # Modified: 2026-04-13, 23:30 - Umstellung auf System-Service
+# Modified: 2026-05-07 - Abhängigkeit auf bluetooth.service (BT-Watcher braucht BlueZ)
 
 [Unit]
 Description=Galerist Digital Art Frame
-After=graphical.target
-Wants=network-online.target
+After=graphical.target bluetooth.service
+Wants=network-online.target bluetooth.service
 
 [Service]
 Type=simple

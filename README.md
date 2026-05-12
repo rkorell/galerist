@@ -85,18 +85,20 @@ Aktivieren mit `systemctl daemon-reload && systemctl restart bluetooth`. Nicht a
 
 `DisablePlugins=` in `/etc/bluetooth/main.conf` funktioniert **nicht** — BlueZ 5.82 ignoriert es als „Unknown key", die Plugin-Disable-Option ist nur als Kommandozeilenparameter gültig.
 
-### Erkennung (`input_handler.py`)
+### Erkennung (`input_handler.py`, udev-getrieben)
 
-`find_remote_device()` sucht das passende Input-Device **ohne hardcodierten Namen**:
+`InputHandler` nutzt `pyudev.Monitor` auf das `input`-Subsystem. Sobald ein neues `/dev/input/eventN` erscheint, wird `find_remote_device()` aufgerufen, das **ohne hardcodierten Namen** filtert:
 
 1. **Bus-Filter:** Bus = `0x05` (BT) oder `0x03` (USB). Schließt virtuelle Devices und I2C-Touch-Controller aus, die zufällig Multimedia-Keys mit-advertisen.
 2. **Capability-Schwelle:** Device unterstützt mindestens 2 von `KEY_PLAYPAUSE`, `KEY_NEXTSONG`, `KEY_PREVIOUSSONG`, `KEY_VOLUMEUP`, `KEY_VOLUMEDOWN`.
 
-Beliebige BT-HID-Geräte funktionieren ohne Code-Änderung. Manueller Override über `config.input_device` möglich.
+Beliebige BT-HID-Geräte funktionieren ohne Code-Änderung. Manueller Override über `config.input_device` möglich. Kein Polling — der Handler reagiert event-getrieben.
 
-### Selbstheilung nach Reboot
+### HID-Profil-Trigger (`bt_watcher.py`, D-Bus-getrieben)
 
-BlueZ stellt nach Reboot zwar die BT-Schicht zu paired+trusted Devices her (`Connected: yes`), zieht aber das **HID-Profil nicht aktiv hoch** — `/dev/input/eventN` fehlt. Der Auto-Reconnect-Loop in `input_handler.py` zählt erfolglose Such-Polls und triggert nach 15 s einmalig `bluetoothctl disconnect` + `connect`. Der explizite Connect baut alle Profile auf, HID ist da, das Suchen findet das Gerät beim nächsten Poll. Bei späterem Verbindungsverlust gilt derselbe Mechanismus — der Counter wird bei Erfolg zurückgesetzt.
+BlueZ stellt nach Reboot/Wake zwar die BT-Schicht zu paired+trusted Devices her (`Connected: yes`), baut das **HID-Profil aber nicht zuverlässig auf** — `/dev/input/eventN` fehlt. `BTHidWatcher` lauscht parallel auf BlueZ-D-Bus-Signale (`org.bluez.ObjectManager.InterfacesAdded` und `Properties.PropertiesChanged` auf `Device1`). Sobald ein Device, das die HID-Service-UUID (`00001124-…`) advertised, ein Wake-Signal sendet (`RSSI`-Update / `ManufacturerData` / `ServicesResolved`), ruft der Watcher gezielt `Device1.ConnectProfile(HID-UUID)` auf. BlueZ baut daraufhin das HID-Profil auf, der Kernel exportiert `eventN`, der `InputHandler` greift.
+
+`bt_watcher` und `input_handler` arbeiten unabhängig — ein D-Bus-Subscriber, ein udev-Subscriber, kein Sync-Event zwischen ihnen.
 
 ### Diagnose-Tool: `decode_remote.py`
 

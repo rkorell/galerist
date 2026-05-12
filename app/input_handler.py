@@ -5,15 +5,15 @@
 # Modified: 2026-05-06 - Capability-basierte Geräteerkennung (statt Namen-Match)
 # Modified: 2026-05-06 - Bus-Filter (BT/USB), schließt vc4-hdmi und Konsorten aus
 # Modified: 2026-05-06 - Selbstheilung: bluetoothctl disconnect+connect nach 3 erfolglosen Polls
+# Modified: 2026-05-07 - Polling+Heilung raus, pyudev-Monitor rein (event-getrieben)
 
 import logging
 import os
-import subprocess
 import threading
-import time
 from collections.abc import Callable
 
 import libevdev
+import pyudev
 
 logger = logging.getLogger(__name__)
 
@@ -105,42 +105,15 @@ def find_remote_device(config_device: str | None = None) -> str | None:
     return None
 
 
-def _trigger_bt_reconnect() -> None:
-    """Heilung des HID-Profils nach Boot-Reconnect.
-
-    BlueZ stellt nach Reboot zwar die BT-Schicht zu paired+trusted Devices her
-    ('Connected: yes'), zieht aber das HID-Profil nicht aktiv hoch — kein
-    /dev/input/eventN. Heilung: einmal disconnect+connect über alle bekannten
-    Devices. Der explizite connect baut alle Profile auf.
-    """
-    try:
-        out = subprocess.run(
-            ['bluetoothctl', 'devices'],
-            capture_output=True, text=True, timeout=10, check=False,
-        )
-    except (subprocess.SubprocessError, OSError) as e:
-        logger.warning("bluetoothctl devices fehlgeschlagen: %s", e)
-        return
-
-    macs = [line.split()[1] for line in out.stdout.splitlines() if line.startswith('Device ')]
-    if not macs:
-        return
-
-    logger.info("BT-Heilung: disconnect+connect für %d Device(s): %s", len(macs), ', '.join(macs))
-    for mac in macs:
-        try:
-            subprocess.run(['bluetoothctl', 'disconnect', mac], capture_output=True, timeout=10, check=False)
-            time.sleep(1)
-            subprocess.run(['bluetoothctl', 'connect', mac], capture_output=True, timeout=10, check=False)
-        except (subprocess.SubprocessError, OSError) as e:
-            logger.warning("Reconnect %s fehlgeschlagen: %s", mac, e)
-
-
 class InputHandler:
-    """Liest Tasten-Events der Fire TV Remote in einem Background-Thread.
+    """Liest Tasten-Events einer Bluetooth-Fernbedienung in einem Background-Thread.
 
-    Ruft bei jedem erkannten Tastendruck den callback mit dem
-    Aktionsnamen auf (z.B. 'next', 'prev', 'info_on').
+    Nutzt pyudev.Monitor, um auf udev-Events des input-Subsystems zu reagieren.
+    Kein Polling — der Thread blockiert auf Monitor.poll() und reagiert event-
+    getrieben, sobald ein neues /dev/input/eventN erscheint oder verschwindet.
+
+    Ruft bei jedem erkannten Tastendruck den callback mit dem Aktionsnamen auf
+    (z.B. 'next', 'prev', 'info_on').
     """
 
     def __init__(self, callback: Callable[[str], None], config):
@@ -150,66 +123,72 @@ class InputHandler:
         self._thread: threading.Thread | None = None
 
     def start(self):
-        """Background-Thread starten."""
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True, name='InputHandler')
         self._thread.start()
 
     def stop(self):
-        """Background-Thread beenden."""
         self._running = False
 
     def _run(self):
-        """Event-Loop: Device suchen, öffnen, Tasten lesen. Bei Verlust erneut suchen."""
+        """Event-Loop: udev-Monitor auf /dev/input, beim Erscheinen eines
+        passenden Devices öffnen und Tasten lesen. Bei Verlust zurück in den Wait."""
+        context = pyudev.Context()
+        monitor = pyudev.Monitor.from_netlink(context)
+        monitor.filter_by(subsystem='input')
+        monitor.start()
+
         logged_waiting = False
-        not_found_count = 0
-        HEAL_AFTER_TRIES = 3  # 3 * 5s = 15s ohne FB → BT-Reconnect triggern
         while self._running:
-            # Device suchen (wiederholt, bis gefunden)
+            # Initial / nach Verlust: einmal direkt versuchen
             device_path = find_remote_device(self.config.input_device)
+
             if not device_path:
                 if not logged_waiting:
-                    logger.info("Warte auf Fernbedienung ...")
+                    logger.info("Warte auf Fernbedienung (udev-Monitor) ...")
                     logged_waiting = True
-                not_found_count += 1
-                if not_found_count == HEAL_AFTER_TRIES:
-                    _trigger_bt_reconnect()
-                time.sleep(5)
+                # Auf udev-Event warten (Timeout 1 s, damit stop() schnell greift)
+                udev_event = monitor.poll(timeout=1.0)
+                if udev_event is None:
+                    continue
+                if udev_event.action != 'add':
+                    continue
+                # Device-Node muss /dev/input/event* sein
+                node = udev_event.device_node
+                if not node or not node.startswith('/dev/input/event'):
+                    continue
+                # Im nächsten Loop-Durchlauf prüft find_remote_device, ob das
+                # neue Device unsere FB ist (Capability+Bus-Filter).
                 continue
+
             logged_waiting = False
-            not_found_count = 0
 
             try:
                 fd = open(device_path, 'rb')
                 dev = libevdev.Device(fd)
             except (PermissionError, OSError) as e:
                 logger.error("Kann Device nicht öffnen (%s): %s", device_path, e)
-                time.sleep(5)
+                # Kurz auf udev-Event warten, statt sofort zu hämmern
+                monitor.poll(timeout=1.0)
                 continue
 
             logger.info("Input-Handler aktiv: %s (%s)", dev.name, device_path)
 
-            # Event-Loop: liest bis Fehler oder Disconnect
             try:
-                while self._running:
-                    for event in dev.events():
-                        if not self._running:
-                            break
-                        if event.matches(libevdev.EV_KEY) and event.value == 1:
-                            action = KEY_MAP.get(event.code)
-                            if action:
-                                logger.debug("Taste: %s → %s", event.code, action)
-                                self.callback(action)
+                for event in dev.events():
+                    if not self._running:
+                        break
+                    if event.matches(libevdev.EV_KEY) and event.value == 1:
+                        action = KEY_MAP.get(event.code)
+                        if action:
+                            logger.debug("Taste: %s → %s", event.code, action)
+                            self.callback(action)
             except libevdev.EventsDroppedException:
-                for event in dev.sync():
+                for _ in dev.sync():
                     pass
             except OSError as e:
-                logger.warning("Fernbedienung getrennt: %s — suche erneut", e)
+                logger.warning("Fernbedienung getrennt: %s — Monitor reaktiviert", e)
             finally:
                 fd.close()
-
-            # Kurz warten vor erneutem Suchen
-            if self._running:
-                time.sleep(3)
 
         logger.info("Input-Handler beendet")

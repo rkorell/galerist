@@ -20,6 +20,7 @@ from config import Config
 from metadata_cache import MetadataCache
 from display_control import DisplayControl
 from input_handler import InputHandler
+from bt_watcher import BTHidWatcher
 
 # Logging konfigurieren
 logging.basicConfig(
@@ -74,7 +75,10 @@ class GaleristApp:
         # Playlist initialisieren
         self._init_playlist()
 
-        # Input-Handler (Bluetooth-Fernbedienung)
+        # BT-Watcher: erzwingt HID-Profil-Connect bei FB-Wake (D-Bus-getrieben)
+        self.bt_watcher = BTHidWatcher()
+
+        # Input-Handler (Bluetooth-Fernbedienung, udev-getrieben)
         self.input_handler = InputHandler(
             callback=self._handle_action,
             config=self.config
@@ -88,6 +92,7 @@ class GaleristApp:
         signal.signal(signal.SIGINT, self._shutdown)
         signal.signal(signal.SIGTERM, self._shutdown)
 
+        self.bt_watcher.start()
         self.input_handler.start()
         self._start_rotation()
         self._start_schedule_checker()
@@ -186,6 +191,7 @@ class GaleristApp:
     def _cleanup(self):
         """Chromium und Input-Handler sauber beenden."""
         self.input_handler.stop()
+        self.bt_watcher.stop()
         if self._chromium and self._chromium.poll() is None:
             logger.info("Beende Chromium (PID %d) ...", self._chromium.pid)
             self._chromium.terminate()
