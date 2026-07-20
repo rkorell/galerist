@@ -1,6 +1,8 @@
 # (c) Dr. Ralf Korell
 # Galerist — Display-Steuerung (HDMI on/off via wlr-randr / xrandr)
 # Modified: 2026-04-13, 19:40 - Erstellt
+# Modified: 2026-07-20 - Fix: display_on-Startzustand None (unbekannt), erzwingt HDMI-Sync beim ersten Check nach Service-Restart
+# Modified: 2026-07-20 - Fix: _detect_output ueberspringt Headless-Dummy (NOOP-*), waehlt realen Output statt erster Zeile
 
 import logging
 import os
@@ -18,7 +20,7 @@ class DisplayControl:
     """
 
     def __init__(self):
-        self.display_on: bool = True
+        self.display_on: bool | None = None
         self._tool = self._detect_tool()
         self._env = self._build_env()
         self._output_name = self._detect_output()
@@ -26,7 +28,7 @@ class DisplayControl:
 
     def turn_on(self):
         """Display einschalten."""
-        if self.display_on:
+        if self.display_on is True:
             return
         if self._tool == 'wlr-randr':
             self._run(['wlr-randr', '--output', self._output_name, '--on'])
@@ -37,7 +39,7 @@ class DisplayControl:
 
     def turn_off(self):
         """Display ausschalten."""
-        if not self.display_on:
+        if self.display_on is False:
             return
         if self._tool == 'wlr-randr':
             self._run(['wlr-randr', '--output', self._output_name, '--off'])
@@ -65,9 +67,9 @@ class DisplayControl:
             # Mitternachts-Crossing: z.B. 22:00 – 06:00
             should_be_on = now >= on_time or now < off_time
 
-        if should_be_on and not self.display_on:
+        if should_be_on and self.display_on is not True:
             self.turn_on()
-        elif not should_be_on and self.display_on:
+        elif not should_be_on and self.display_on is not False:
             self.turn_off()
 
         return should_be_on
@@ -106,9 +108,16 @@ class DisplayControl:
         if self._tool == 'wlr-randr':
             result = self._run(['wlr-randr'])
             if result.stdout:
-                # Erste Zeile: 'HDMI-A-1 "Make" "Model"'
-                first_line = result.stdout.strip().split('\n')[0]
-                return first_line.split()[0]
+                # Nicht-eingerückte Zeilen sind Output-Namen ('HDMI-A-1 "Make" "Model"'),
+                # eingerückte Zeilen sind Eigenschaften. Headless-Dummy (NOOP-*) überspringen,
+                # den wlroots anlegt, wenn der reale Output deaktiviert wurde.
+                outputs = [line.split()[0] for line in result.stdout.split('\n')
+                           if line and not line[0].isspace()]
+                real = [o for o in outputs if not o.startswith('NOOP')]
+                if real:
+                    return real[0]
+                if outputs:
+                    return outputs[0]
         else:
             result = self._run(['xrandr', '--query'])
             if result.stdout:
