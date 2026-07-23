@@ -3,6 +3,8 @@
     "metadata_cache_file": "/path/to/metadata_cache.json",
     "display_interval_seconds": 120,
     "overlay_duration_seconds": 10,
+    "display_backend": "wlr-randr",
+    "display_output": "HDMI-A-1",
     "operating_hours": {
         "on_time": "07:00",
         "off_time": "23:00"

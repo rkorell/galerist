@@ -3,13 +3,12 @@
 # Modified: 2026-04-13, 19:35 - Erstellt
 # Modified: 2026-04-13, 22:00 - Erweiterte Metadaten
 # Modified: 2026-04-14, 22:30 - Umstellung auf IPTC/XMP statt DB
+# Modified: 2026-07-23 - Pillow Lazy-Import (nur im Refresh-Pfad geladen, spart ~8 MB Baseline-RAM)
 
 import json
 import logging
 import os
 import xml.etree.ElementTree as ET
-
-from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +87,7 @@ class MetadataCache:
 
     def _read_xmp(self, path: str) -> dict:
         """XMP-Metadaten aus einer JPEG-Datei lesen."""
+        from PIL import Image  # Lazy: nur im Refresh-Pfad, nicht im Dauerbetrieb
         try:
             img = Image.open(path)
             xmp_xml = None

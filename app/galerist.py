@@ -3,6 +3,8 @@
 # Modified: 2026-04-13, 19:50 - Erstellt
 # Modified: 2026-04-13, 22:45 - Chromium-Start integriert, Ctrl+C Handler
 # Modified: 2026-04-17, 13:00 - Chromium single-process (OOM-Fix), Watchdog, Restart-API
+# Modified: 2026-07-23 - DisplayControl mit backend/output aus Config instanziiert, Compositor-Wait vor erstem Betriebsstunden-Check
+# Modified: 2026-07-23 - Scheduler event-getrieben (kein 60-s-Polling); Chromium-Cache auf tmpfs + 1 MB (kein SD-Wear)
 
 import json
 import logging
@@ -49,7 +51,10 @@ class GaleristApp:
             self.metadata_cache.refresh_from_files()
 
         # Display-Steuerung
-        self.display_control = DisplayControl()
+        self.display_control = DisplayControl(
+            backend=getattr(self.config, 'display_backend', 'wlr-randr'),
+            output=getattr(self.config, 'display_output', 'HDMI-A-1'),
+        )
 
         # Playlist
         self.playlist: list[str] = []
@@ -154,7 +159,10 @@ class GaleristApp:
             '--disable-sync',
             '--password-store=basic',
             '--js-flags=--max-old-space-size=128',
-            '--disk-cache-size=52428800',
+            # Cache auf tmpfs (RAM, nie SD → kein Flash-Wear) und auf 1 MB gekappt.
+            # Lokaler Server, 1.204 rotierende Bilder → Browser-Cache bringt praktisch nichts.
+            '--disk-cache-dir=/tmp/galerist-cache',
+            '--disk-cache-size=1048576',
             # Single-Process: statt 9 Prozesse nur 1 → drastisch weniger RAM
             '--single-process',
             '--in-process-gpu',
@@ -295,19 +303,27 @@ class GaleristApp:
     # ── Betriebsstunden ───────────────────────────────────────
 
     def _start_schedule_checker(self):
-        """Betriebsstunden-Prüfung als Daemon-Thread."""
-        def check_loop():
+        """Betriebsstunden-Steuerung als event-getriebener Daemon-Thread.
+
+        Schläft jeweils exakt bis zum nächsten Umschaltpunkt statt zu pollen.
+        Die Zeiten sind ein statischer Faktor und werden einmal beim Start
+        gelesen — eine Änderung wird per Service-Neustart übernommen.
+        """
+        def scheduler():
+            self.display_control.wait_ready()
+            hours = self.config.operating_hours
+            on_time, off_time = hours['on_time'], hours['off_time']
             while True:
                 try:
-                    hours = self.config.operating_hours
-                    self.display_control.check_operating_hours(
-                        hours['on_time'], hours['off_time']
-                    )
+                    self.display_control.check_operating_hours(on_time, off_time)
+                    wait_s = self.display_control.seconds_until_next_boundary(on_time, off_time)
                 except Exception as e:
-                    logger.error("Betriebsstunden-Check Fehler: %s", e)
-                time.sleep(60)
+                    logger.error("Betriebsstunden-Scheduler Fehler: %s", e)
+                    wait_s = 3600
+                logger.info("Nächster Display-Umschaltpunkt in %d s", int(wait_s))
+                time.sleep(wait_s + 1)
 
-        t = threading.Thread(target=check_loop, daemon=True, name='ScheduleChecker')
+        t = threading.Thread(target=scheduler, daemon=True, name='ScheduleChecker')
         t.start()
 
     # ── Action-Handler ────────────────────────────────────────
