@@ -6,11 +6,14 @@
 # Modified: 2026-05-06 - Bus-Filter (BT/USB), schließt vc4-hdmi und Konsorten aus
 # Modified: 2026-05-06 - Selbstheilung: bluetoothctl disconnect+connect nach 3 erfolglosen Polls
 # Modified: 2026-05-07 - Polling+Heilung raus, pyudev-Monitor rein (event-getrieben)
+# Modified: 2026-08-01 - Kurz/Lang-Gesten (BOOX Tappy): Entscheidung beim Loslassen per Druckdauer, kein Polling/Timer
+# Modified: 2026-08-01 - Lang-Navigation getauscht: VolumeUp=prev (zurueck), VolumeDown=next (weiter)
 
 import logging
 import os
 import threading
 from collections.abc import Callable
+from time import monotonic
 
 import libevdev
 import pyudev
@@ -24,8 +27,6 @@ KEY_MAP = {
     # BT005 Lenkrad-Fernbedienung
     libevdev.EV_KEY.KEY_NEXTSONG:     'next',
     libevdev.EV_KEY.KEY_PREVIOUSSONG: 'prev',
-    libevdev.EV_KEY.KEY_VOLUMEUP:     'info_on',
-    libevdev.EV_KEY.KEY_VOLUMEDOWN:   'info_off',
     libevdev.EV_KEY.KEY_PLAYPAUSE:    'playpause',
     # Fire TV Remote (Fallback)
     libevdev.EV_KEY.KEY_LEFT:         'prev',
@@ -38,6 +39,17 @@ KEY_MAP = {
     libevdev.EV_KEY.KEY_PLAY:         'playpause',
     libevdev.EV_KEY.KEY_PAUSE:        'playpause',
 }
+
+
+# Kurz/Lang-Gesten (BOOX Tappy: sendet nur VolumeUp/Down, kein Auto-Repeat).
+# Entscheidung fällt beim Loslassen anhand der Druckdauer — kein Timer, kein Polling.
+# kurz = Beschreibung ein/aus, lang = blättern vor/zurück.
+GESTURE_MAP = {
+    libevdev.EV_KEY.KEY_VOLUMEUP:   {'short': 'info_on',  'long': 'prev'},
+    libevdev.EV_KEY.KEY_VOLUMEDOWN: {'short': 'info_off', 'long': 'next'},
+}
+# Schwellenwert Sekunden: Messung BOOX Tappy — kurz <= 0,3 s, lang >= 1,6 s.
+LONG_PRESS_THRESHOLD = 0.5
 
 
 # Multimedia-Keys, an denen eine Fernbedienung erkannt wird.
@@ -121,6 +133,7 @@ class InputHandler:
         self.config = config
         self._running = False
         self._thread: threading.Thread | None = None
+        self._press_start: dict = {}  # keycode -> monotonic()-Zeit des DOWN (Kurz/Lang)
 
     def start(self):
         self._running = True
@@ -178,10 +191,25 @@ class InputHandler:
                 for event in dev.events():
                     if not self._running:
                         break
-                    if event.matches(libevdev.EV_KEY) and event.value == 1:
-                        action = KEY_MAP.get(event.code)
+                    if not event.matches(libevdev.EV_KEY):
+                        continue
+                    code = event.code
+                    if code in GESTURE_MAP:
+                        # Kurz/Lang: DOWN merkt Zeit, UP entscheidet; REPEAT (value 2) egal
+                        if event.value == 1:
+                            self._press_start[code] = monotonic()
+                        elif event.value == 0:
+                            t0 = self._press_start.pop(code, None)
+                            if t0 is not None:
+                                gesture = 'long' if (monotonic() - t0) >= LONG_PRESS_THRESHOLD else 'short'
+                                action = GESTURE_MAP[code].get(gesture)
+                                if action:
+                                    logger.debug("Taste: %s (%s) → %s", code, gesture, action)
+                                    self.callback(action)
+                    elif event.value == 1:
+                        action = KEY_MAP.get(code)
                         if action:
-                            logger.debug("Taste: %s → %s", event.code, action)
+                            logger.debug("Taste: %s → %s", code, action)
                             self.callback(action)
             except libevdev.EventsDroppedException:
                 for _ in dev.sync():
