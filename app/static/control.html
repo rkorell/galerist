@@ -4,6 +4,7 @@
 <!-- Modified: 2026-04-13, 22:30 - Windrose zurück, Filmstreifen separat, Slider fix -->
 <!-- Modified: 2026-04-17, 13:00 - Restart-Button -->
 <!-- Modified: 2026-05-12 - PWA: manifest + apple-touch-icon (Startbildschirm-Icon Android/iOS) -->
+<!-- Modified: 2026-08-01 - Anzeigegeraet-Umschalter (Monitor/Fernseher) fuer display_backend -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -195,6 +196,18 @@
         .field-row { display: flex; gap: 0.75rem; }
         .field-row .field { flex: 1; }
 
+        /* Anzeigegerät (Radio) */
+        .radio-row {
+            display: flex; align-items: center; gap: 0.5rem;
+            padding: 0.5rem 0; font-size: 0.95rem; color: var(--text-primary);
+            cursor: pointer; -webkit-tap-highlight-color: transparent;
+        }
+        .radio-row input[type="radio"] {
+            width: 20px; height: 20px; accent-color: var(--accent); flex-shrink: 0;
+        }
+        .radio-hint { font-size: 0.75rem; color: var(--text-muted); }
+        .radio-note { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.3rem; }
+
         .btn {
             width: 100%; padding: 0.85rem; border: none; border-radius: 12px;
             font-size: 0.95rem; font-weight: 600; cursor: pointer;
@@ -298,6 +311,19 @@
                         <span class="field-label">Ausschaltzeit</span>
                         <input type="time" class="field-input" id="setting-off-time">
                     </div>
+                </div>
+
+                <div class="field">
+                    <span class="field-label">Anzeigegerät</span>
+                    <label class="radio-row">
+                        <input type="radio" name="display-backend" value="wlr-randr">
+                        Monitor <span class="radio-hint">— aus/an per Bildsignal</span>
+                    </label>
+                    <label class="radio-row">
+                        <input type="radio" name="display-backend" value="cec">
+                        Fernseher <span class="radio-hint">— aus/an per HDMI-CEC (Anynet+)</span>
+                    </label>
+                    <div class="radio-note">Änderung wirkt erst nach „Service neu starten".</div>
                 </div>
 
                 <button class="btn btn-primary" id="btn-save-settings">Speichern</button>

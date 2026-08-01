@@ -3,6 +3,7 @@
 // Modified: 2026-04-13, 20:00 - Erstellt
 // Modified: 2026-04-13, 22:15 - Filmstreifen, Slider, Korell-Design
 // Modified: 2026-04-17, 13:00 - Restart-Button
+// Modified: 2026-08-01 - Anzeigegeraet-Umschalter (display_backend Monitor/Fernseher) laden + speichern
 
 class GaleristControl {
     constructor() {
@@ -186,6 +187,12 @@ class GaleristControl {
                     data.operating_hours.on_time;
                 document.getElementById('setting-off-time').value =
                     data.operating_hours.off_time;
+
+                // Anzeigegerät (display_backend)
+                const backend = data.display_backend || 'wlr-randr';
+                const backendRadio = document.querySelector(
+                    'input[name="display-backend"][value="' + backend + '"]');
+                if (backendRadio) backendRadio.checked = true;
             })
             .catch(() => {
                 this._showStatus('Einstellungen nicht ladbar');
@@ -206,6 +213,8 @@ class GaleristControl {
                 off_time: document.getElementById('setting-off-time').value,
             }
         };
+        const backendEl = document.querySelector('input[name="display-backend"]:checked');
+        if (backendEl) payload.display_backend = backendEl.value;
 
         fetch('/api/settings', {
             method: 'POST',

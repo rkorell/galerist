@@ -5,6 +5,7 @@
 # Modified: 2026-04-17, 13:00 - Chromium single-process (OOM-Fix), Watchdog, Restart-API
 # Modified: 2026-07-23 - DisplayControl mit backend/output aus Config instanziiert, Compositor-Wait vor erstem Betriebsstunden-Check
 # Modified: 2026-07-23 - Scheduler event-getrieben (kein 60-s-Polling); Chromium-Cache auf tmpfs + 1 MB (kein SD-Wear)
+# Modified: 2026-08-01 - display_backend (Monitor/Fernseher) ueber /api/settings GET+POST verfuegbar
 
 import json
 import logging
@@ -416,6 +417,7 @@ class GaleristApp:
                 'display_interval_seconds': self.config.display_interval_seconds,
                 'overlay_duration_seconds': self.config.overlay_duration_seconds,
                 'operating_hours': self.config.operating_hours,
+                'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
             })
 
         @self.app.route('/api/settings', methods=['POST'])
@@ -442,6 +444,11 @@ class GaleristApp:
                         'off_time': oh['off_time']
                     }
 
+            if 'display_backend' in data:
+                val = data['display_backend']
+                if val in ('wlr-randr', 'cec', 'xrandr'):
+                    updates['display_backend'] = val
+
             if updates:
                 self.config.update_many(updates)
                 self._reset_timer()
@@ -451,6 +458,7 @@ class GaleristApp:
                 'display_interval_seconds': self.config.display_interval_seconds,
                 'overlay_duration_seconds': self.config.overlay_duration_seconds,
                 'operating_hours': self.config.operating_hours,
+                'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
             }})
 
         @self.app.route('/api/status')
