@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <!-- (c) Dr. Ralf Korell -->
 <!-- Galerist — Kiosk-Anzeige (Vollbild-Bilddarstellung) -->
+<!-- Modified: 2026-08-02 - Dimm-Overlay (#dimmer) fuer Helligkeitssteuerung -->
+<!-- Modified: 2026-08-02 - Akku-Warnbanner (#battery-warning) fuer die Fernbedienung -->
+<!-- Modified: 2026-08-02 - Akku-Warnung als roter Header (#overlay-battery) in der Infobox statt transientem Kaestchen -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -13,7 +16,10 @@
         <img id="current-image" src="" alt="">
     </div>
 
+    <div id="dimmer"></div>
+
     <div id="overlay" class="hidden">
+        <div id="overlay-battery" class="hidden">&#128267; Fernbedienung-Akku schwach: <span id="battery-pct"></span>&thinsp;%</div>
         <div id="overlay-artist"></div>
         <div id="overlay-title"></div>
         <div id="overlay-details"></div>

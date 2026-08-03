@@ -1,11 +1,20 @@
 // (c) Dr. Ralf Korell
 // Galerist — Kiosk-Display: WebSocket-Client, Bildwechsel, Overlay
 // Modified: 2026-04-13, 19:55 - Erstellt
+// Modified: 2026-08-02 - Dimm-Overlay: set_brightness setzt #dimmer-Opacity live
+// Modified: 2026-08-02 - Slider perzeptuell (CIE-L*/Weber-Fechner): Leuchtdichte = (v/100)^3
+// Modified: 2026-08-02 - Exponent gamma-korrigiert auf 1.4 (Overlay mischt in sRGB, ^2.2 steckt schon drin)
+// Modified: 2026-08-02 - battery_warning: Warnbanner bei schwachem FB-Akku
+// Modified: 2026-08-02 - blackout: Voll-Schwarz-Overlay fuer den TV-Keep-shallow-Puls
+// Modified: 2026-08-02 - Akku-Warnung als roter Header in der Infobox (gepinnt bis Quittung/Zuklappen)
 
 class GaleristDisplay {
     constructor() {
         this.imageEl = document.getElementById('current-image');
         this.overlayEl = document.getElementById('overlay');
+        this.dimmerEl = document.getElementById('dimmer');
+        this.batteryHeaderEl = document.getElementById('overlay-battery');
+        this._lastBrightness = 100;
         this.ws = null;
         this.reconnectDelay = 2000;
         this.connect();
@@ -51,12 +60,46 @@ class GaleristDisplay {
                 break;
             case 'hide_overlay':
                 this.overlayEl.classList.add('hidden');
+                this.batteryHeaderEl.classList.add('hidden');  // Zuklappen = Warnung quittiert
                 break;
             case 'preload':
                 // Bild im Browser-Cache vorhalten
                 new Image().src = msg.src;
                 break;
+            case 'set_brightness':
+                this._setBrightness(msg.value);
+                break;
+            case 'battery_warning':
+                this._showBatteryWarning(msg.percent);
+                break;
+            case 'blackout':
+                this._setBlackout(msg.on);
+                break;
         }
+    }
+
+    _setBlackout(on) {
+        if (on) {
+            this.dimmerEl.style.opacity = '1';           // voll schwarz
+        } else {
+            this._setBrightness(this._lastBrightness);   // zurueck auf zuletzt gesetzte Helligkeit
+        }
+    }
+
+    _showBatteryWarning(percent) {
+        document.getElementById('battery-pct').textContent = percent;
+        this.batteryHeaderEl.classList.remove('hidden');   // roter Header oben in der Infobox
+        this.overlayEl.classList.remove('hidden');         // Infobox aufklappen (gepinnt bis Quittung)
+    }
+
+    _setBrightness(value) {
+        // Slider = empfundene Helligkeit. Wahrnehmung ~ Kubikwurzel der Leuchtdichte
+        // (CIE-L*/Weber-Fechner); das Overlay mischt aber in sRGB, wodurch die Opacity
+        // bereits mit ~2.2 wirkt. Netto ergibt Exponent 3/2.2 ≈ 1.4 eine perzeptuell
+        // lineare Skala — jeder Prozent fühlt sich gleich stark an.
+        const v = Math.max(20, Math.min(100, parseInt(value, 10) || 100));
+        this._lastBrightness = v;
+        this.dimmerEl.style.opacity = (1 - Math.pow(v / 100, 1.4)).toFixed(3);
     }
 
     _showImage(src, metadata, index, total) {

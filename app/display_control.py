@@ -6,6 +6,7 @@
 # Modified: 2026-07-23 - Umbau: Tool + Output aus Config (kein Raten), Detektion entfernt, Compositor-Wait vor erstem Schalten, Return-Code-Pruefung
 # Modified: 2026-07-23 - Neu: seconds_until_next_boundary() fuer event-getriebenen Scheduler (kein 60-s-Polling mehr)
 # Modified: 2026-08-01 - Neu: CEC-Backend (display_backend=cec) fuer Fernseher — Standby/Wake per cec-ctl, Pi-Ausgang bleibt an
+# Modified: 2026-08-02 - Neu: cec_wake()/cec_standby() fuer Keep-shallow-Puls (ohne display_on-Aenderung)
 
 import logging
 import os
@@ -42,6 +43,23 @@ class DisplayControl:
         logger.info("Display-Steuerung: backend=%s, output=%s%s",
                      self._tool, self._output_name,
                      f", cec-phys-addr={self._cec_phys_addr}" if self._cec else "")
+
+    def cec_wake(self) -> bool:
+        """CEC-Weck-Sequenz senden, OHNE display_on zu ändern (für Keep-shallow-Puls)."""
+        if not self._cec:
+            return False
+        return self._cec_send([
+            ['cec-ctl', '-d', CEC_DEVICE, '--to', CEC_TV_ADDR, '--image-view-on'],
+            ['cec-ctl', '-d', CEC_DEVICE, '--active-source', f'phys-addr={self._cec_phys_addr}'],
+        ])
+
+    def cec_standby(self) -> bool:
+        """CEC-Standby senden, OHNE display_on zu ändern (für Keep-shallow-Puls)."""
+        if not self._cec:
+            return False
+        return self._cec_send([
+            ['cec-ctl', '-d', CEC_DEVICE, '--to', CEC_TV_ADDR, '--standby'],
+        ])
 
     def wait_ready(self, timeout: float = 180.0, interval: float = 0.5) -> bool:
         """Wartet, bis das Display-Backend bereit ist (Compositor bzw. CEC-Adapter).

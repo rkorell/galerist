@@ -1,5 +1,7 @@
 # Galerist — Digitaler Bilderrahmen
 
+*Stand: 2026-08-03*
+
 Ersatz für proprietäre digitale Bilderrahmen wie den Netgear Meural Canvas II auf einem Linux-Gerät mit Wayland. Zeigt eine kuratierte Bildersammlung im Vollbild, blendet Metadaten als Museums-Schild ein, lässt sich optional per Bluetooth-HID-Eingabegerät steuern. Liest die Anzeige-Metadaten direkt aus IPTC/XMP der JPEG-Dateien — **autark zur Laufzeit**, keine Datenbank, keine Netzwerk-Abhängigkeit.
 
 Optimiert für RAM-arme Single-Board-Computer (Single-Process-Chromium für Systeme ab ~1 GB RAM).
@@ -13,7 +15,8 @@ galerist/
     ├── config.py              Loader für config.json
     ├── metadata_cache.py      IPTC/XMP-Cache, beim Start aus JPEGs gelesen
     ├── input_handler.py       Optionale BT-Fernbedienung via libevdev
-    ├── display_control.py     Display on/off via wlr-randr
+    ├── bt_watcher.py          D-Bus-Watcher, stellt HID-Profil nach Wake/Reboot her
+    ├── display_control.py     Display an/aus — Backend wählbar (wlr-randr / HDMI-CEC / xrandr)
     ├── static/                Frontend (Kiosk-Anzeige + Web-App)
     ├── systemd/               System-Service-Vorlage
     └── tools/decode_remote.py Diagnose-Werkzeug für Input-Devices
@@ -21,9 +24,11 @@ galerist/
 
 ## Voraussetzungen
 
-- Linux mit Display-Server (Wayland **oder** X11) — `display_control.py` erkennt automatisch und nutzt `wlr-randr` bzw. `xrandr`
-- Python 3.11+, Flask, libevdev (System + Python-Binding), Pillow
+- Linux mit Display-Server (Wayland **oder** X11) — das Anzeige-Backend wird per Config gewählt (`display_backend`, siehe unten)
+- Python 3.11+, Flask, flask-sock, libevdev (System + Python-Binding), pyudev, Pillow
 - Chromium
+- `wlr-randr` (Wayland) bzw. `xrandr` (X11) — für das Monitor-Backend (Bildsignal an/aus)
+- `cec-utils`/`v4l-utils` (`cec-ctl`) — nur für das Fernseher-Backend (HDMI-CEC), User in Gruppe `video`
 - `bluez` — nur falls eine BT-Fernbedienung genutzt werden soll
 - Optional für die Diagnose: `evtest`
 
@@ -36,11 +41,30 @@ galerist/
 | `image_directory` | absoluter Pfad zur JPEG-Sammlung |
 | `metadata_cache_file` | Pfad für den persistierten XMP/IPTC-Cache |
 | `display_interval_seconds` | Wartezeit zwischen Bildwechseln |
-| `overlay_duration_seconds` | wie lange das Metadaten-Overlay sichtbar ist |
+| `overlay_duration_seconds` | wie lange das Metadaten-Overlay sichtbar ist; `0` = kein automatisches Ausblenden (bleibt offen) |
+| `display_backend` | `wlr-randr` (Monitor), `cec` (Fernseher via HDMI-CEC) oder `xrandr` (X11-Legacy) |
+| `display_output` | Ausgang, z. B. `HDMI-A-1` |
+| `display_brightness` | Software-Dimmer 20–100 (Overlay-Deckkraft, kein Hardware-Backlight) |
 | `operating_hours` | Display-Zeiten `on_time`/`off_time` (HH:MM, leer = immer an) |
 | `flask_host`, `flask_port` | Bind-Adresse + Port der Web-App |
 | `input_device` | `null` = Auto-Erkennung; expliziter `/dev/input/eventN` als Override |
 | `log_level` | `INFO`, `DEBUG`, `WARNING`, ... |
+
+Nur für das Fernseher-Backend (`display_backend: cec`) relevant: `tv_keepshallow_minutes` / `tv_keepshallow_seconds` (kurzer CEC-Puls im Intervall, damit der TV nicht in nicht-weckbares Deep-Standby fällt). Für eine BT-Fernbedienung mit Akku-Meldung optional: `fb_battery_mac` und `fb_battery_warn_percent`.
+
+## Anzeige (Backend, Betriebszeiten, Helligkeit)
+
+Das Anzeige-Backend ist **bewusst config-gesteuert** (`display_backend`), keine Auto-Erkennung — ein zickiger CEC-Poll könnte den Modus sonst für den Tag verstellen:
+
+- **`wlr-randr` (Monitor):** schaltet das Bildsignal an/aus (`--on`/`--off`).
+- **`cec` (Fernseher):** schaltet den TV per HDMI-CEC in Standby bzw. weckt ihn (`cec-ctl`). Der Pi-HDMI-Ausgang bleibt dabei **immer an** — CEC wirkt nur bei aktivem Ausgang; würde er abgeschaltet, risse die CEC-Leitung ab. Manche Fernseher fallen aus stundenlangem Standby in ein nicht mehr per CEC weckbares Deep-Standby; dagegen hält ein kurzer Keep-shallow-Puls (`tv_keepshallow_*`) den TV flach.
+- **`xrandr`:** X11-Fallback (Legacy).
+
+Ein Wechsel des Backends in der Web-App wirkt **erst nach Service-Neustart** (das Backend wird beim App-Start gelesen).
+
+Die **Betriebszeiten** (`operating_hours`) steuert ein event-getriebener Scheduler, der bis zum nächsten Umschaltpunkt schläft (kein Polling) — genau zwei Schaltvorgänge pro Tag.
+
+Die **Helligkeit** ist ein Software-Dimmer: ein schwarzes Overlay legt sich gamma-korrigiert über das Bild (`opacity = 1 − (v/100)^1.4`, `v` = `display_brightness`, Bereich 20–100). Der Slider in der Web-App wirkt live per WebSocket. Hinweis: bei `display_brightness = 20` ist das Bild ~90 % abgedunkelt und **wirkt wie ausgeschaltet**, obwohl die Anzeige läuft.
 
 ## Service
 
@@ -99,6 +123,10 @@ Beliebige BT-HID-Geräte funktionieren ohne Code-Änderung. Manueller Override �
 BlueZ stellt nach Reboot/Wake zwar die BT-Schicht zu paired+trusted Devices her (`Connected: yes`), baut das **HID-Profil aber nicht zuverlässig auf** — `/dev/input/eventN` fehlt. `BTHidWatcher` lauscht parallel auf BlueZ-D-Bus-Signale (`org.bluez.ObjectManager.InterfacesAdded` und `Properties.PropertiesChanged` auf `Device1`). Sobald ein Device, das die HID-Service-UUID (`00001124-…`) advertised, ein Wake-Signal sendet (`RSSI`-Update / `ManufacturerData` / `ServicesResolved`), ruft der Watcher gezielt `Device1.ConnectProfile(HID-UUID)` auf. BlueZ baut daraufhin das HID-Profil auf, der Kernel exportiert `eventN`, der `InputHandler` greift.
 
 `bt_watcher` und `input_handler` arbeiten unabhängig — ein D-Bus-Subscriber, ein udev-Subscriber, kein Sync-Event zwischen ihnen.
+
+### Akku-Warnung (optional)
+
+Ist in der Config eine `fb_battery_mac` hinterlegt, liest die App den Akkustand der Fernbedienung aus dem BlueZ Battery Service (`bluetoothctl info`) und blendet bei Unterschreiten von `fb_battery_warn_percent` (Default 20 %) eine Warnung im Overlay ein.
 
 ### Diagnose-Tool: `decode_remote.py`
 

@@ -6,11 +6,17 @@
 # Modified: 2026-07-23 - DisplayControl mit backend/output aus Config instanziiert, Compositor-Wait vor erstem Betriebsstunden-Check
 # Modified: 2026-07-23 - Scheduler event-getrieben (kein 60-s-Polling); Chromium-Cache auf tmpfs + 1 MB (kein SD-Wear)
 # Modified: 2026-08-01 - display_backend (Monitor/Fernseher) ueber /api/settings GET+POST verfuegbar
+# Modified: 2026-08-02 - info_toggle-Action; Helligkeits-Overlay (set_brightness live via WS, display_brightness persistiert)
+# Modified: 2026-08-02 - FB-Akku-Watchdog: taeglicher Batterie-Check der Fernbedienung, Warnung am Display bei <= Schwelle
+# Modified: 2026-08-02 - Keep-shallow-Puls (Deep-Standby vermeiden) + Blackout-Overlay an Betriebsstunden-Uebergaengen
+# Modified: 2026-08-02 - FB-Akku-Warnung als roter Header in der Infobox, Check beim Einschalten, gepinnt bis quittiert
+# Modified: 2026-08-03 - Overlay-Dauer 0-20s (0=kein Auto-Close); FB-Akku-Warnung zusaetzlich per fleet-notify (Einweg-Push)
 
 import json
 import logging
 import os
 import random
+import re
 import signal
 import subprocess
 import threading
@@ -34,6 +40,21 @@ logger = logging.getLogger('galerist')
 
 # Werkzeug (HTTP-Requests) und andere Libs nur bei Warnungen
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
+
+# DEBUG-Instrumentierung — in gemeinsame Datei mit input_handler.
+# Ueber _DBG_ENABLED an-/abschaltbar (Default aus).
+_DBG_ENABLED = False
+
+
+def _dbg(msg):
+    if not _DBG_ENABLED:
+        return
+    try:
+        with open('/home/pi/galerist/inputdebug.log', 'a') as f:
+            f.write(time.strftime('%H:%M:%S') + ' APP ' + msg + '\n')
+    except Exception:
+        pass
 
 
 class GaleristApp:
@@ -62,6 +83,14 @@ class GaleristApp:
         self.current_index: int = 0
         self.paused: bool = False
         self.overlay_visible: bool = False
+        # Bildhelligkeit (Dimm-Overlay): 100 = klar, 20 = stark gedimmt. Live via WS,
+        # persistiert in config.display_brightness (nur beim Speichern auf Platte).
+        self._brightness: int = getattr(self.config, 'display_brightness', 100)
+        # Voll-Schwarz-Overlay während der TV-Off-Zeit (Keep-shallow-Pulse bleiben unsichtbar)
+        self._blackout: bool = False
+        # Aktive FB-Akku-Warnung (Prozent, oder None). Roter Header in der Infobox,
+        # gepinnt bis manuell zugeklappt (= quittiert).
+        self._battery_warning: int | None = None
         self._lock = threading.Lock()
 
         # WebSocket-Clients
@@ -104,6 +133,7 @@ class GaleristApp:
         self._start_schedule_checker()
         self._start_chromium()
         self._start_chromium_watchdog()
+        self._start_tv_keepshallow()
 
         logger.info("Galerist gestartet: %d Bilder, Intervall %ds, Port %d",
                      len(self.playlist),
@@ -191,6 +221,108 @@ class GaleristApp:
         t = threading.Thread(target=watchdog, daemon=True, name='ChromiumWatchdog')
         t.start()
 
+    # ── Fernbedienungs-Akku ───────────────────────────────────
+
+    def _read_fb_battery(self) -> int | None:
+        """Akkustand der Bluetooth-Fernbedienung in Prozent (oder None).
+
+        Liest den BlueZ Battery Service via bluetoothctl. None, wenn keine MAC
+        konfiguriert, die FB nicht verbunden ist oder kein Wert vorliegt.
+        """
+        mac = getattr(self.config, 'fb_battery_mac', None)
+        if not mac:
+            return None
+        try:
+            out = subprocess.run(
+                ['bluetoothctl', 'info', mac],
+                capture_output=True, text=True, timeout=8
+            ).stdout
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.warning("FB-Akku: bluetoothctl fehlgeschlagen: %s", e)
+            return None
+        connected = False
+        percent = None
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith('Connected:'):
+                connected = s.endswith('yes')
+            elif 'Battery Percentage' in s:
+                m = re.search(r'\((\d+)\)', s)  # "Battery Percentage: 0x14 (20)"
+                if m:
+                    percent = int(m.group(1))
+        if not connected:
+            return None
+        return percent
+
+    def _check_fb_battery(self):
+        """FB-Akku prüfen (beim morgendlichen Einschalten). Warnt nur, wenn ein Wert
+        vorliegt und er <= Schwelle ist. Ist die FB nicht verbunden, gibt es keinen
+        Wert — das ist bewusst KEINE Meldung wert."""
+        try:
+            pct = self._read_fb_battery()
+        except Exception as e:
+            logger.error("FB-Akku-Check Fehler: %s", e)
+            return
+        if pct is None:
+            return  # FB nicht verbunden / kein Wert — still bleiben
+        logger.info("FB-Akku: %d%%", pct)
+        if pct <= getattr(self.config, 'fb_battery_warn_percent', 20):
+            logger.warning("FB-Akku schwach (%d%%) — Warnung in der Infobox", pct)
+            self._battery_warning = pct
+            self.overlay_visible = True
+            self._broadcast({'type': 'battery_warning', 'percent': pct})
+            self._notify_fb_battery(pct)
+
+    def _notify_fb_battery(self, pct: int):
+        """Einweg-Push per fleet-notify (Handy), zusätzlich zur Overlay-Warnung.
+        Fehlertolerant — scheitert der Push, bleibt die Overlay-Warnung unberührt."""
+        try:
+            subprocess.run(
+                ['fleet-notify', 'INFO', f'FB-Akku schwach ({pct}%) — bitte laden'],
+                capture_output=True, timeout=15, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            logger.warning("fleet-notify fehlgeschlagen: %s", e)
+
+    def _ack_battery_warning(self):
+        """FB-Akku-Warnung quittieren (beim manuellen Zuklappen der Infobox)."""
+        if self._battery_warning is not None:
+            logger.info("FB-Akku-Warnung quittiert (war %d%%)", self._battery_warning)
+            self._battery_warning = None
+
+    # ── TV Keep-shallow (Deep-Standby vermeiden) ──────────────
+
+    def _start_tv_keepshallow(self):
+        """Weckt den Fernseher nachts periodisch kurz per CEC und legt ihn wieder
+        schlafen, damit der Standby-Timer die Deep-Standby-Schwelle nie erreicht
+        (sonst ist er morgens nicht mehr weckbar). Nur bei display_backend='cec'.
+
+        Kein Overlay-Handling hier — das Schwarz-Overlay liegt in der Off-Zeit ohnehin
+        an (an den Betriebsstunden-Übergängen gesetzt), sodass die Pulse unsichtbar bleiben.
+        """
+        if getattr(self.config, 'display_backend', '') != 'cec':
+            return
+        interval = getattr(self.config, 'tv_keepshallow_minutes', 120) * 60
+        hold = getattr(self.config, 'tv_keepshallow_seconds', 30)
+        if interval <= 0:
+            return
+
+        def loop():
+            time.sleep(interval)
+            while True:
+                try:
+                    # Nur wenn der TV gerade AUS sein soll (Betriebsstunden 'off').
+                    # Overlay liegt in der Off-Zeit ohnehin schwarz an (Betriebsstunden-Übergang).
+                    if self.display_control.display_on is False:
+                        logger.info("Keep-shallow: TV kurz wecken (Deep-Standby vermeiden)")
+                        self.display_control.cec_wake()
+                        time.sleep(hold)
+                        self.display_control.cec_standby()
+                except Exception as e:
+                    logger.error("Keep-shallow Fehler: %s", e)
+                time.sleep(interval)
+
+        threading.Thread(target=loop, daemon=True, name='TVKeepShallow').start()
+
     def _shutdown(self, signum, frame):
         """Signal-Handler für sauberes Beenden."""
         logger.info("Beende Galerist (Signal %d) ...", signum)
@@ -268,12 +400,14 @@ class GaleristApp:
         if self._timer:
             self._timer.cancel()
         interval = self.config.display_interval_seconds
+        _dbg('schedule_next interval=' + str(interval))  # DEBUG
         self._timer = threading.Timer(interval, self._rotation_tick)
         self._timer.daemon = True
         self._timer.start()
 
     def _rotation_tick(self):
         """Timer-Callback: Bild wechseln wenn nicht pausiert."""
+        _dbg('tick paused=' + str(self.paused) + ' display_on=' + str(self.display_control.display_on))  # DEBUG
         if not self.paused and self.display_control.display_on:
             self.advance(1)
             # Nächstes Bild vorladen (bei ausreichend langem Intervall)
@@ -303,6 +437,17 @@ class GaleristApp:
 
     # ── Betriebsstunden ───────────────────────────────────────
 
+    def _set_blackout(self, on: bool):
+        """Voll-Schwarz-Overlay am Kiosk setzen (nur cec-Backend), nur bei Zustandswechsel.
+        An den Betriebsstunden-Übergängen aufgerufen: an beim Off-Übergang, aus beim
+        On-Übergang — so bleibt die Off-Zeit inkl. Keep-shallow-Pulse schwarz."""
+        if getattr(self.config, 'display_backend', '') != 'cec':
+            return
+        if on == self._blackout:
+            return
+        self._blackout = on
+        self._broadcast({'type': 'blackout', 'on': on})
+
     def _start_schedule_checker(self):
         """Betriebsstunden-Steuerung als event-getriebener Daemon-Thread.
 
@@ -314,9 +459,14 @@ class GaleristApp:
             self.display_control.wait_ready()
             hours = self.config.operating_hours
             on_time, off_time = hours['on_time'], hours['off_time']
+            prev_on = None
             while True:
                 try:
-                    self.display_control.check_operating_hours(on_time, off_time)
+                    should_be_on = self.display_control.check_operating_hours(on_time, off_time)
+                    self._set_blackout(not should_be_on)
+                    if should_be_on and prev_on is not True:
+                        self._check_fb_battery()  # beim (morgendlichen) Einschalten
+                    prev_on = should_be_on
                     wait_s = self.display_control.seconds_until_next_boundary(on_time, off_time)
                 except Exception as e:
                     logger.error("Betriebsstunden-Scheduler Fehler: %s", e)
@@ -332,6 +482,7 @@ class GaleristApp:
     def _handle_action(self, action: str):
         """Zentrale Aktion verarbeiten (von FB oder Web-App)."""
         logger.debug("Aktion: %s", action)
+        _dbg('handle_action ' + str(action))  # DEBUG
 
         if action == 'next':
             self.advance(1)
@@ -342,14 +493,29 @@ class GaleristApp:
         elif action == 'info_on':
             self.overlay_visible = True
             self._broadcast({'type': 'show_overlay'})
-            # Overlay nach konfigurierter Dauer automatisch ausblenden
-            threading.Timer(
-                self.config.overlay_duration_seconds,
-                self._auto_hide_overlay
-            ).start()
+            # Overlay nach konfigurierter Dauer automatisch ausblenden (0 = aus, bleibt offen)
+            if self.config.overlay_duration_seconds > 0:
+                threading.Timer(
+                    self.config.overlay_duration_seconds,
+                    self._auto_hide_overlay
+                ).start()
         elif action == 'info_off':
             self.overlay_visible = False
+            self._ack_battery_warning()
             self._broadcast({'type': 'hide_overlay'})
+        elif action == 'info_toggle':
+            if self.overlay_visible:
+                self.overlay_visible = False
+                self._ack_battery_warning()
+                self._broadcast({'type': 'hide_overlay'})
+            else:
+                self.overlay_visible = True
+                self._broadcast({'type': 'show_overlay'})
+                if self.config.overlay_duration_seconds > 0:
+                    threading.Timer(
+                        self.config.overlay_duration_seconds,
+                        self._auto_hide_overlay
+                    ).start()
         elif action == 'playpause':
             self.paused = not self.paused
             logger.info("Diashow %s", "pausiert" if self.paused else "fortgesetzt")
@@ -360,10 +526,26 @@ class GaleristApp:
             self._reset_timer()
 
     def _auto_hide_overlay(self):
-        """Overlay automatisch ausblenden nach Timer-Ablauf."""
-        if self.overlay_visible:
+        """Overlay automatisch ausblenden nach Timer-Ablauf.
+
+        Bei aktiver Akku-Warnung NICHT ausblenden — die bleibt gepinnt, bis manuell
+        zugeklappt (= quittiert)."""
+        if self.overlay_visible and self._battery_warning is None:
             self.overlay_visible = False
             self._broadcast({'type': 'hide_overlay'})
+
+    def set_brightness(self, value):
+        """Bildhelligkeit live setzen (20–100) und an Kiosk-Clients broadcasten.
+
+        Kein Disk-Write — Persistenz erfolgt erst über /api/settings (Speichern).
+        """
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            return
+        v = max(20, min(100, v))
+        self._brightness = v
+        self._broadcast({'type': 'set_brightness', 'value': v})
 
     # ── WebSocket ─────────────────────────────────────────────
 
@@ -418,6 +600,7 @@ class GaleristApp:
                 'overlay_duration_seconds': self.config.overlay_duration_seconds,
                 'operating_hours': self.config.operating_hours,
                 'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
+                'display_brightness': self._brightness,
             })
 
         @self.app.route('/api/settings', methods=['POST'])
@@ -433,7 +616,7 @@ class GaleristApp:
 
             if 'overlay_duration_seconds' in data:
                 val = int(data['overlay_duration_seconds'])
-                if 3 <= val <= 60:
+                if 0 <= val <= 20:
                     updates['overlay_duration_seconds'] = val
 
             if 'operating_hours' in data:
@@ -449,6 +632,12 @@ class GaleristApp:
                 if val in ('wlr-randr', 'cec', 'xrandr'):
                     updates['display_backend'] = val
 
+            if 'display_brightness' in data:
+                val = int(data['display_brightness'])
+                if 20 <= val <= 100:
+                    updates['display_brightness'] = val
+                    self._brightness = val
+
             if updates:
                 self.config.update_many(updates)
                 self._reset_timer()
@@ -459,6 +648,7 @@ class GaleristApp:
                 'overlay_duration_seconds': self.config.overlay_duration_seconds,
                 'operating_hours': self.config.operating_hours,
                 'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
+                'display_brightness': self._brightness,
             }})
 
         @self.app.route('/api/status')
@@ -500,8 +690,13 @@ class GaleristApp:
                     {'type': 'show_image', **self.current_image_data()},
                     ensure_ascii=False
                 ))
+                ws.send(json.dumps({'type': 'set_brightness', 'value': self._brightness}))
+                if self._blackout:
+                    ws.send(json.dumps({'type': 'blackout', 'on': True}))
                 if self.overlay_visible:
                     ws.send(json.dumps({'type': 'show_overlay'}))
+                if self._battery_warning is not None:
+                    ws.send(json.dumps({'type': 'battery_warning', 'percent': self._battery_warning}))
             except Exception:
                 pass
 
@@ -512,7 +707,9 @@ class GaleristApp:
                         break
                     msg = json.loads(data)
                     action = msg.get('action', '')
-                    if action:
+                    if action == 'set_brightness':
+                        self.set_brightness(msg.get('value'))
+                    elif action:
                         self._handle_action(action)
             except (ConnectionClosed, ConnectionError):
                 pass

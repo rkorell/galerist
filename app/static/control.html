@@ -5,6 +5,7 @@
 <!-- Modified: 2026-04-17, 13:00 - Restart-Button -->
 <!-- Modified: 2026-05-12 - PWA: manifest + apple-touch-icon (Startbildschirm-Icon Android/iOS) -->
 <!-- Modified: 2026-08-01 - Anzeigegeraet-Umschalter (Monitor/Fernseher) fuer display_backend -->
+<!-- Modified: 2026-08-02 - Layout: grosses Vorschaubild oben, Button-Reihe statt Windrose, Helligkeits-Slider -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -81,41 +82,38 @@
             max-width: 480px; margin: 0 auto; width: 100%;
         }
 
-        /* === Windrose (Kreuz) === */
-        .windrose {
-            display: grid;
-            grid-template-areas:
-                ".    up    ."
-                "left .     right"
-                ".    down  .";
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 10px;
-            width: 280px;
+        /* === Vorschaubild (bildschirmbreit) === */
+        .preview-image {
+            width: 100%; max-height: 45vh;
+            object-fit: contain; background: #000;
+            border-radius: 12px; border: 1px solid var(--border-color);
+            box-shadow: 0 2px 10px var(--shadow-color);
+            display: block;
         }
-        .wr-btn {
-            width: 80px; height: 80px; font-size: 1.8rem;
-            border: 2px solid var(--border-color); border-radius: 16px;
+
+        /* === Steuerung (Button-Reihe unter dem Bild) === */
+        .controls {
+            display: flex; gap: 0.75rem; width: 100%;
+        }
+        .ctrl-btn {
+            flex: 1; padding: 0.9rem 0.5rem;
+            border: 2px solid var(--border-color); border-radius: 14px;
             background: var(--bg-card); color: var(--text-primary);
+            font-size: 1.4rem;
+            display: flex; flex-direction: column; align-items: center; gap: 3px;
             cursor: pointer; -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
-            display: flex; align-items: center; justify-content: center;
-            flex-direction: column;
             transition: all var(--transition-fast);
             box-shadow: 0 2px 8px var(--shadow-color);
-            justify-self: center;
         }
-        .wr-btn:active {
+        .ctrl-btn:active {
             background: var(--accent); border-color: var(--accent);
-            transform: scale(0.95); box-shadow: 0 0 15px var(--accent-glow);
+            transform: scale(0.97); box-shadow: 0 0 15px var(--accent-glow);
         }
-        .wr-up    { grid-area: up; }
-        .wr-left  { grid-area: left; }
-        .wr-right { grid-area: right; }
-        .wr-down  { grid-area: down; }
-        .wr-label {
-            font-size: 0.55rem; color: var(--text-muted);
-            margin-top: 2px; pointer-events: none;
+        .ctrl-label {
+            font-size: 0.7rem; color: var(--text-muted); pointer-events: none;
         }
+        .ctrl-btn:active .ctrl-label { color: #fff; }
 
         /* === Filmstreifen === */
         .filmstrip {
@@ -249,21 +247,8 @@
     </header>
 
     <main class="main">
-        <!-- Windrose: 4 Pfeile als Kreuz -->
-        <div class="windrose">
-            <button class="wr-btn wr-up" data-action="info_on">
-                &#9650;<span class="wr-label">Info</span>
-            </button>
-            <button class="wr-btn wr-left" data-action="prev">
-                &#9664;<span class="wr-label">Zurück</span>
-            </button>
-            <button class="wr-btn wr-right" data-action="next">
-                &#9654;<span class="wr-label">Weiter</span>
-            </button>
-            <button class="wr-btn wr-down" data-action="info_off">
-                &#9660;<span class="wr-label">Info aus</span>
-            </button>
-        </div>
+        <!-- Vorschaubild (bildschirmbreit) -->
+        <img id="preview-image" class="preview-image" src="" alt="">
 
         <!-- Filmstreifen -->
         <div class="filmstrip" id="filmstrip">
@@ -276,6 +261,19 @@
 
         <!-- Bildinfo -->
         <div id="preview-info" class="preview-info"></div>
+
+        <!-- Steuerung: Button-Reihe unter dem Bild -->
+        <div class="controls">
+            <button class="ctrl-btn" data-action="prev">
+                &#9664;<span class="ctrl-label">Zurück</span>
+            </button>
+            <button class="ctrl-btn" data-action="info_toggle">
+                &#9432;<span class="ctrl-label">Info</span>
+            </button>
+            <button class="ctrl-btn" data-action="next">
+                &#9654;<span class="ctrl-label">Weiter</span>
+            </button>
+        </div>
 
         <!-- Einstellungen -->
         <details class="settings-card" id="settings-card">
@@ -299,7 +297,14 @@
                 <div class="field">
                     <span class="field-label">Overlay-Dauer</span>
                     <div class="field-value" id="overlay-display">10 Sek</div>
-                    <input type="range" id="setting-overlay-duration" min="3" max="60" step="1" value="10">
+                    <input type="range" id="setting-overlay-duration" min="0" max="20" step="1" value="10">
+                </div>
+
+                <div class="field">
+                    <span class="field-label">Helligkeit</span>
+                    <div class="field-value" id="brightness-display">100 %</div>
+                    <input type="range" id="setting-brightness" min="20" max="100" step="5" value="100">
+                    <div class="radio-note">Wirkt sofort; „Speichern" merkt den Wert dauerhaft.</div>
                 </div>
 
                 <div class="field-row">

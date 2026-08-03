@@ -4,11 +4,13 @@
 // Modified: 2026-04-13, 22:15 - Filmstreifen, Slider, Korell-Design
 // Modified: 2026-04-17, 13:00 - Restart-Button
 // Modified: 2026-08-01 - Anzeigegeraet-Umschalter (display_backend Monitor/Fernseher) laden + speichern
+// Modified: 2026-08-02 - Grosses Vorschaubild, Helligkeits-Slider (live + speichern)
 
 class GaleristControl {
     constructor() {
         this.ws = null;
         this.reconnectDelay = 2000;
+        this.previewEl = document.getElementById('preview-image');
         this.connect();
         this._initButtons();
         this._initSettings();
@@ -43,9 +45,16 @@ class GaleristControl {
         }
     }
 
+    _sendBrightness(value) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ action: 'set_brightness', value: value }));
+        }
+    }
+
     _handleMessage(msg) {
         switch (msg.type) {
             case 'show_image':
+                if (msg.src && this.previewEl) this.previewEl.src = msg.src;
                 this._updateFilmstrip(msg.strip);
                 this._updatePreviewInfo(msg.metadata, msg.index, msg.total);
                 break;
@@ -140,7 +149,15 @@ class GaleristControl {
         const oSlider = document.getElementById('setting-overlay-duration');
         oSlider.addEventListener('input', () => {
             document.getElementById('overlay-display').textContent =
-                oSlider.value + ' Sek';
+                oSlider.value === '0' ? 'aus (bleibt offen)' : oSlider.value + ' Sek';
+        });
+
+        // Helligkeit-Slider → Anzeige + live ans Display senden
+        const bSlider = document.getElementById('setting-brightness');
+        bSlider.addEventListener('input', () => {
+            document.getElementById('brightness-display').textContent =
+                bSlider.value + ' %';
+            this._sendBrightness(parseInt(bSlider.value, 10));
         });
 
         // Buttons
@@ -180,7 +197,7 @@ class GaleristControl {
                 document.getElementById('setting-overlay-duration').value =
                     data.overlay_duration_seconds;
                 document.getElementById('overlay-display').textContent =
-                    data.overlay_duration_seconds + ' Sek';
+                    data.overlay_duration_seconds === 0 ? 'aus (bleibt offen)' : data.overlay_duration_seconds + ' Sek';
 
                 // Zeiten
                 document.getElementById('setting-on-time').value =
@@ -193,6 +210,12 @@ class GaleristControl {
                 const backendRadio = document.querySelector(
                     'input[name="display-backend"][value="' + backend + '"]');
                 if (backendRadio) backendRadio.checked = true;
+
+                // Helligkeit
+                const brightness = data.display_brightness || 100;
+                document.getElementById('setting-brightness').value = brightness;
+                document.getElementById('brightness-display').textContent =
+                    brightness + ' %';
             })
             .catch(() => {
                 this._showStatus('Einstellungen nicht ladbar');
@@ -215,6 +238,9 @@ class GaleristControl {
         };
         const backendEl = document.querySelector('input[name="display-backend"]:checked');
         if (backendEl) payload.display_backend = backendEl.value;
+
+        payload.display_brightness = parseInt(
+            document.getElementById('setting-brightness').value, 10);
 
         fetch('/api/settings', {
             method: 'POST',

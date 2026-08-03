@@ -18,6 +18,13 @@ app/metadata_cache.json
 # Crawler komplett (Korell-Infrastruktur, gehört nicht in public Repo)
 crawler/
 
+# TV-Steuerung (Token/MAC/IP — standortspezifisch, gehört nicht in public Repo)
+app/tools/tizen_tv.py
+app/tools/wol_tv.py
+app/tools/tv-an
+app/tools/tv-aus
+app/tools/tv-token.txt
+
 # Testdaten
 app/exif_test/
 

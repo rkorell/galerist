@@ -13,12 +13,27 @@ import logging
 import os
 import threading
 from collections.abc import Callable
-from time import monotonic
+from time import monotonic, strftime
 
 import libevdev
 import pyudev
 
 logger = logging.getLogger(__name__)
+
+# DEBUG-Instrumentierung — jedes Event/Aktion in Datei mitschreiben.
+# Ueber DBG_ENABLED an-/abschaltbar (Default aus).
+DBG_ENABLED = False
+DBG_FILE = '/home/pi/galerist/inputdebug.log'
+
+
+def _dbg(msg):
+    if not DBG_ENABLED:
+        return
+    try:
+        with open(DBG_FILE, 'a') as f:
+            f.write(strftime('%H:%M:%S') + ' IH ' + msg + '\n')
+    except Exception:
+        pass
 
 # Bluetooth-Fernbedienung Tasten → Galerist-Aktionen
 # BT005 Lenkrad-FB: 5 Tasten (Play/Pause, Vol+/-, Forward/Back)
@@ -186,6 +201,7 @@ class InputHandler:
                 continue
 
             logger.info("Input-Handler aktiv: %s (%s)", dev.name, device_path)
+            _dbg('BIND ' + repr(dev.name) + ' ' + device_path)  # DEBUG
 
             try:
                 for event in dev.events():
@@ -194,6 +210,7 @@ class InputHandler:
                     if not event.matches(libevdev.EV_KEY):
                         continue
                     code = event.code
+                    _dbg('event ' + getattr(code, 'name', str(code)) + ' value=' + str(event.value))  # DEBUG
                     if code in GESTURE_MAP:
                         # Kurz/Lang: DOWN merkt Zeit, UP entscheidet; REPEAT (value 2) egal
                         if event.value == 1:
@@ -201,13 +218,16 @@ class InputHandler:
                         elif event.value == 0:
                             t0 = self._press_start.pop(code, None)
                             if t0 is not None:
-                                gesture = 'long' if (monotonic() - t0) >= LONG_PRESS_THRESHOLD else 'short'
+                                dur = monotonic() - t0
+                                gesture = 'long' if dur >= LONG_PRESS_THRESHOLD else 'short'
                                 action = GESTURE_MAP[code].get(gesture)
+                                _dbg('gesture ' + getattr(code, 'name', str(code)) + ' dur=%.2f %s -> %s' % (dur, gesture, action))  # DEBUG
                                 if action:
                                     logger.debug("Taste: %s (%s) → %s", code, gesture, action)
                                     self.callback(action)
                     elif event.value == 1:
                         action = KEY_MAP.get(code)
+                        _dbg('keymap ' + getattr(code, 'name', str(code)) + ' -> ' + str(action))  # DEBUG
                         if action:
                             logger.debug("Taste: %s → %s", code, action)
                             self.callback(action)
