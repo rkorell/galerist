@@ -6,6 +6,7 @@
 // Modified: 2026-08-01 - Anzeigegeraet-Umschalter (display_backend Monitor/Fernseher) laden + speichern
 // Modified: 2026-08-02 - Grosses Vorschaubild, Helligkeits-Slider (live + speichern)
 // Modified: 2026-08-20 - Counter zeigt stabile Katalognummer (meta.katalog_nr) statt Shuffle-Position
+// Modified: 2026-08-20 - Originaltitel (meta.titel_original) in Klammern nach dem deutschen Titel
 
 class GaleristControl {
     constructor() {
@@ -90,7 +91,12 @@ class GaleristControl {
         const titel = clean(meta.titel);
         const jahr = clean(meta.jahr);
         if (kuenstler) parts.push(kuenstler);
-        if (titel) parts.push('\u201E' + titel + '\u201C');
+        if (titel) {
+            let t = '\u201E' + titel + '\u201C';
+            const orig = clean(meta.titel_original);
+            if (orig && orig.toLowerCase() !== titel.toLowerCase()) t += ' (' + orig + ')';
+            parts.push(t);
+        }
         if (jahr) parts.push(jahr);
         // Katalognummer (stabil, ins XMP gebrannt) statt Shuffle-Position; total = Bestand
         const katalogNr = meta.katalog_nr || '';

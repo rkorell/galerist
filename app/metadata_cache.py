@@ -5,6 +5,8 @@
 # Modified: 2026-04-14, 22:30 - Umstellung auf IPTC/XMP statt DB
 # Modified: 2026-07-23 - Pillow Lazy-Import (nur im Refresh-Pfad geladen, spart ~8 MB Baseline-RAM)
 # Modified: 2026-08-20 - dc:identifier (gebrannte Katalognummer) aus XMP gelesen -> meta['katalog_nr']
+# Modified: 2026-08-20 - dc:title sprach-alternativ getrennt (x-default=deutsch, en=Original) + dc:subject als such_tags
+# Modified: 2026-08-20 - Rand-Whitespace (inkl. \xa0) aller Textfelder zentral gestrippt
 
 import json
 import logging
@@ -110,6 +112,8 @@ class MetadataCache:
             # dc:creator, dc:title, dc:description aus erstem oder zweitem Description-Block
             kuenstler = ''
             titel = ''
+            titel_original = ''
+            such_tags = []
             description = ''
             jahr = ''
             sammlung = ''
@@ -122,10 +126,20 @@ class MetadataCache:
                 if creator is not None and creator.text:
                     kuenstler = creator.text
 
-                # dc:title
-                title = desc.find('.//dc:title//rdf:li', _NS)
-                if title is not None and title.text:
-                    titel = title.text
+                # dc:title (sprach-alternativ: x-default/de = deutsch, en = Originaltitel)
+                for li in desc.findall('.//dc:title//rdf:li', _NS):
+                    if not li.text:
+                        continue
+                    lang = li.get('{http://www.w3.org/XML/1998/namespace}lang', '')
+                    if lang == 'en':
+                        titel_original = li.text
+                    else:
+                        titel = li.text
+
+                # dc:subject (Suchschlagwörter)
+                for li in desc.findall('.//dc:subject//rdf:li', _NS):
+                    if li.text:
+                        such_tags.append(li.text)
 
                 # dc:description
                 desc_el = desc.find('.//dc:description//rdf:li', _NS)
@@ -171,9 +185,21 @@ class MetadataCache:
                     elif p and not masse:
                         material = p
 
+            # Rand-Whitespace zentral entfernen (str.strip() erfasst auch \xa0)
+            kuenstler = kuenstler.strip()
+            titel = titel.strip()
+            titel_original = titel_original.strip()
+            jahr = jahr.strip()
+            material = material.strip()
+            masse = masse.strip()
+            sammlung = sammlung.strip()
+            standort = standort.strip()
+            such_tags = [t.strip() for t in such_tags if t.strip()]
+
             return {
                 'kuenstler': kuenstler,
                 'titel': titel,
+                'titel_original': titel_original,
                 'jahr': jahr,
                 'material': material,
                 'sammlung': sammlung,
@@ -184,6 +210,7 @@ class MetadataCache:
                 'datum': '',
                 'wikidata_id': '',
                 'katalog_nr': katalog_nr,
+                'such_tags': such_tags,
             }
 
         except Exception as e:
@@ -195,6 +222,7 @@ class MetadataCache:
         return {
             'kuenstler': '',
             'titel': self._titel_aus_dateiname(os.path.basename(path)),
+            'titel_original': '',
             'jahr': '',
             'material': '',
             'sammlung': '',
@@ -205,6 +233,7 @@ class MetadataCache:
             'datum': '',
             'wikidata_id': '',
             'katalog_nr': '',
+            'such_tags': [],
         }
 
     def _save_cache(self):

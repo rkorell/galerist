@@ -8,6 +8,7 @@
 // Modified: 2026-08-02 - blackout: Voll-Schwarz-Overlay fuer den TV-Keep-shallow-Puls
 // Modified: 2026-08-02 - Akku-Warnung als roter Header in der Infobox (gepinnt bis Quittung/Zuklappen)
 // Modified: 2026-08-20 - Zaehler zeigt stabile Katalognummer (meta.katalog_nr) statt Shuffle-Position
+// Modified: 2026-08-20 - Originaltitel (meta.titel_original) klein unter dem deutschen Titel
 
 class GaleristDisplay {
     constructor() {
@@ -139,6 +140,17 @@ class GaleristDisplay {
         if (jahr) titelParts.push(jahr);
         document.getElementById('overlay-title').textContent =
             titelParts.join(', ');
+
+        // Originaltitel klein darunter (nur wenn vorhanden und vom deutschen Titel abweichend)
+        const orig = clean(meta.titel_original);
+        const origEl = document.getElementById('overlay-title-orig');
+        if (orig && orig.toLowerCase() !== titel.toLowerCase()) {
+            origEl.textContent = '(' + orig + ')';
+            origEl.style.display = '';
+        } else {
+            origEl.textContent = '';
+            origEl.style.display = 'none';
+        }
 
         // Mehrzeilige Details
         const lines = [];
