@@ -4,6 +4,7 @@
 # Modified: 2026-04-13, 22:00 - Erweiterte Metadaten
 # Modified: 2026-04-14, 22:30 - Umstellung auf IPTC/XMP statt DB
 # Modified: 2026-07-23 - Pillow Lazy-Import (nur im Refresh-Pfad geladen, spart ~8 MB Baseline-RAM)
+# Modified: 2026-08-20 - dc:identifier (gebrannte Katalognummer) aus XMP gelesen -> meta['katalog_nr']
 
 import json
 import logging
@@ -113,6 +114,7 @@ class MetadataCache:
             jahr = ''
             sammlung = ''
             standort = ''
+            katalog_nr = ''
 
             for desc in root.findall('.//rdf:Description', _NS):
                 # dc:creator
@@ -129,6 +131,11 @@ class MetadataCache:
                 desc_el = desc.find('.//dc:description//rdf:li', _NS)
                 if desc_el is not None and desc_el.text:
                     description = desc_el.text
+
+                # dc:identifier (gebrannte Katalognummer)
+                ident = desc.find('.//dc:identifier', _NS)
+                if ident is not None and ident.text:
+                    katalog_nr = ident.text.strip()
 
                 # photoshop:DateCreated, Source, City (als Attribute)
                 date = desc.get('{http://ns.adobe.com/photoshop/1.0/}DateCreated')
@@ -176,6 +183,7 @@ class MetadataCache:
                 'stil': '',
                 'datum': '',
                 'wikidata_id': '',
+                'katalog_nr': katalog_nr,
             }
 
         except Exception as e:
@@ -196,6 +204,7 @@ class MetadataCache:
             'stil': '',
             'datum': '',
             'wikidata_id': '',
+            'katalog_nr': '',
         }
 
     def _save_cache(self):

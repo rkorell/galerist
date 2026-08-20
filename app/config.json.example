@@ -5,6 +5,7 @@
     "overlay_duration_seconds": 10,
     "display_backend": "wlr-randr",
     "display_output": "HDMI-A-1",
+    "display_brightness": 100,
     "operating_hours": {
         "on_time": "07:00",
         "off_time": "23:00"
@@ -12,5 +13,15 @@
     "flask_host": "0.0.0.0",
     "flask_port": 5000,
     "input_device": null,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "fb_battery_mac": null,
+    "fb_battery_warn_percent": 20,
+    "fb_battery_startup_delay_seconds": 300,
+    "fb_battery_check_hours": 24,
+    "tv_keepshallow_minutes": 120,
+    "tv_keepshallow_seconds": 30,
+    "db_host": "localhost",
+    "db_name": "your_db",
+    "db_user": "your_user",
+    "db_password": ""
 }

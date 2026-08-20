@@ -5,6 +5,7 @@
 // Modified: 2026-04-17, 13:00 - Restart-Button
 // Modified: 2026-08-01 - Anzeigegeraet-Umschalter (display_backend Monitor/Fernseher) laden + speichern
 // Modified: 2026-08-02 - Grosses Vorschaubild, Helligkeits-Slider (live + speichern)
+// Modified: 2026-08-20 - Counter zeigt stabile Katalognummer (meta.katalog_nr) statt Shuffle-Position
 
 class GaleristControl {
     constructor() {
@@ -91,7 +92,9 @@ class GaleristControl {
         if (kuenstler) parts.push(kuenstler);
         if (titel) parts.push('\u201E' + titel + '\u201C');
         if (jahr) parts.push(jahr);
-        const counter = (index && total) ? ' (' + index + '/' + total + ')' : '';
+        // Katalognummer (stabil, ins XMP gebrannt) statt Shuffle-Position; total = Bestand
+        const katalogNr = meta.katalog_nr || '';
+        const counter = (katalogNr && total) ? ' (' + katalogNr + '/' + total + ')' : '';
         info.textContent = parts.join(' \u2013 ') + counter;
     }
 

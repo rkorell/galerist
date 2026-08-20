@@ -7,6 +7,7 @@
 // Modified: 2026-08-02 - battery_warning: Warnbanner bei schwachem FB-Akku
 // Modified: 2026-08-02 - blackout: Voll-Schwarz-Overlay fuer den TV-Keep-shallow-Puls
 // Modified: 2026-08-02 - Akku-Warnung als roter Header in der Infobox (gepinnt bis Quittung/Zuklappen)
+// Modified: 2026-08-20 - Zaehler zeigt stabile Katalognummer (meta.katalog_nr) statt Shuffle-Position
 
 class GaleristDisplay {
     constructor() {
@@ -154,8 +155,11 @@ class GaleristDisplay {
         document.getElementById('overlay-details').innerHTML =
             lines.join('<br>');
 
+        // Linke Zahl: stabile, ins XMP gebrannte Katalognummer (nicht die Shuffle-Position).
+        // Rechte Zahl: aktueller Bestand (total = Anzahl JPEGs im Verzeichnis, dynamisch).
+        const katalogNr = meta.katalog_nr || '';
         document.getElementById('overlay-counter').textContent =
-            (index && total) ? index + ' / ' + total : '';
+            (katalogNr && total) ? katalogNr + ' / ' + total : '';
     }
 
     // Tastatur-Steuerung (Entwicklung + ggf. USB-Keyboard)

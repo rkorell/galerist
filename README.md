@@ -1,6 +1,6 @@
 # Galerist — Digitaler Bilderrahmen
 
-*Stand: 2026-08-03*
+*Stand: 2026-08-20*
 
 Ersatz für proprietäre digitale Bilderrahmen wie den Netgear Meural Canvas II auf einem Linux-Gerät mit Wayland. Zeigt eine kuratierte Bildersammlung im Vollbild, blendet Metadaten als Museums-Schild ein, lässt sich optional per Bluetooth-HID-Eingabegerät steuern. Liest die Anzeige-Metadaten direkt aus IPTC/XMP der JPEG-Dateien — **autark zur Laufzeit**, keine Datenbank, keine Netzwerk-Abhängigkeit.
 
@@ -51,6 +51,8 @@ galerist/
 | `log_level` | `INFO`, `DEBUG`, `WARNING`, ... |
 
 Nur für das Fernseher-Backend (`display_backend: cec`) relevant: `tv_keepshallow_minutes` / `tv_keepshallow_seconds` (kurzer CEC-Puls im Intervall, damit der TV nicht in nicht-weckbares Deep-Standby fällt). Für eine BT-Fernbedienung mit Akku-Meldung optional: `fb_battery_mac` und `fb_battery_warn_percent`.
+
+Reservierte Schlüssel, die im Schema geführt, aber **derzeit von keinem Code gelesen** werden (Config läuft dem Code voraus): `fb_battery_startup_delay_seconds`, `fb_battery_check_hours` (vorgesehen für einen intervallbasierten Akku-Check statt des Checks beim Einschalten) sowie `db_host` / `db_name` / `db_user` / `db_password` (die App ist zur Laufzeit autark und nutzt die Datenbank nicht). Sie bleiben Teil des Schemas, damit Master- und Produktiv-Config denselben Schlüsselsatz führen.
 
 ## Anzeige (Backend, Betriebszeiten, Helligkeit)
 
@@ -139,7 +141,9 @@ Schreibt parallel in ein Logfile. Hilft bei FB-Tausch oder Auto-Detect-Problemen
 
 ## Bildersammlung
 
-JPEGs mit IPTC/XMP-Metadaten. Gelesene Felder: `dc:Creator`, `dc:Title`, `photoshop:DateCreated`, `dc:Description`, `photoshop:Source`, `photoshop:City`. Die App liest die Metadaten beim ersten Start und persistiert einen JSON-Cache; Folgestarts sind schnell.
+JPEGs mit IPTC/XMP-Metadaten. Gelesene Felder: `dc:Creator`, `dc:Title`, `photoshop:DateCreated`, `dc:Description`, `photoshop:Source`, `photoshop:City`, `dc:Identifier`. Die App liest die Metadaten beim ersten Start und persistiert einen JSON-Cache; Folgestarts sind schnell.
+
+Das Feld `dc:Identifier` trägt eine **stabile Katalognummer** je Bild. Sie wird im Infofenster als linke Zahl des Zählers angezeigt (`Katalognummer / Bestand`) und bleibt über Neustarts hinweg konstant an dasselbe Bild gebunden — im Gegensatz zur früheren Anzeige, die die zufällige Position im gemischten Durchlauf zeigte und bei jedem Start wieder bei 1 begann. Die rechte Zahl (`Bestand`) ermittelt die App dynamisch aus der Anzahl der JPEGs im Verzeichnis.
 
 ## Lizenz
 
