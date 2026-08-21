@@ -6,6 +6,7 @@
 <!-- Modified: 2026-05-12 - PWA: manifest + apple-touch-icon (Startbildschirm-Icon Android/iOS) -->
 <!-- Modified: 2026-08-01 - Anzeigegeraet-Umschalter (Monitor/Fernseher) fuer display_backend -->
 <!-- Modified: 2026-08-02 - Layout: grosses Vorschaubild oben, Button-Reihe statt Windrose, Helligkeits-Slider -->
+<!-- Modified: 2026-08-21 - Such-Akkordeon (Kuenstler-Autocomplete + Suchwort, Trefferzahl live, Treffer anzeigen / zuruecksetzen) -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -226,6 +227,14 @@
             color: white; box-shadow: 0 2px 10px rgba(217, 74, 74, 0.3);
         }
 
+        /* === Suche === */
+        .search-count {
+            text-align: center; font-size: 0.9rem; font-weight: 600;
+            color: var(--text-secondary); min-height: 1.4rem; margin-bottom: 0.6rem;
+        }
+        .btn-primary:disabled { opacity: 0.45; box-shadow: none; cursor: default; }
+        .btn-primary:disabled:active { transform: none; }
+
         /* === Status === */
         .status { font-size: 0.8rem; color: var(--text-muted); text-align: center; min-height: 1.25rem; }
         .status.ok { color: var(--accent); }
@@ -274,6 +283,27 @@
                 &#9654;<span class="ctrl-label">Weiter</span>
             </button>
         </div>
+
+        <!-- Suche -->
+        <details class="settings-card" id="search-card">
+            <summary class="settings-header">Suche</summary>
+            <div class="settings-body">
+                <div class="field">
+                    <span class="field-label">Künstler (optional)</span>
+                    <input type="text" class="field-input" id="search-artist"
+                           list="artist-list" autocomplete="off" placeholder="z. B. Monet">
+                    <datalist id="artist-list"></datalist>
+                </div>
+                <div class="field">
+                    <span class="field-label">Suchwort</span>
+                    <input type="text" class="field-input" id="search-word"
+                           autocomplete="off" placeholder="z. B. Seerosen">
+                </div>
+                <div class="search-count" id="search-count">&nbsp;</div>
+                <button class="btn btn-primary" id="btn-search-show" disabled>Treffer anzeigen</button>
+                <button class="btn btn-secondary" id="btn-search-reset">Suche zurücksetzen</button>
+            </div>
+        </details>
 
         <!-- Einstellungen -->
         <details class="settings-card" id="settings-card">

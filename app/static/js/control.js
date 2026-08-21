@@ -7,6 +7,7 @@
 // Modified: 2026-08-02 - Grosses Vorschaubild, Helligkeits-Slider (live + speichern)
 // Modified: 2026-08-20 - Counter zeigt stabile Katalognummer (meta.katalog_nr) statt Shuffle-Position
 // Modified: 2026-08-20 - Originaltitel (meta.titel_original) in Klammern nach dem deutschen Titel
+// Modified: 2026-08-21 - Such-Akkordeon: live Trefferzahl (WS 'search'), 'Treffer anzeigen'/'zuruecksetzen', Kuenstler-Datalist via /api/artists
 
 class GaleristControl {
     constructor() {
@@ -17,6 +18,7 @@ class GaleristControl {
         this._initButtons();
         this._initSettings();
         this._initTheme();
+        this._initSearch();
         this._loadSettings();
     }
 
@@ -59,6 +61,12 @@ class GaleristControl {
                 if (msg.src && this.previewEl) this.previewEl.src = msg.src;
                 this._updateFilmstrip(msg.strip);
                 this._updatePreviewInfo(msg.metadata, msg.index, msg.total);
+                break;
+            case 'search_result':
+                this._showSearchCount(msg.count);
+                break;
+            case 'search_state':
+                this._applySearchState(msg.active, msg.count);
                 break;
         }
     }
@@ -259,6 +267,91 @@ class GaleristControl {
         .then(r => r.json())
         .then(() => { this._showStatus('Gespeichert', true); })
         .catch(() => { this._showStatus('Fehler beim Speichern'); });
+    }
+
+    // ── Suche ─────────────────────────────────────────
+
+    _initSearch() {
+        this._searchTimer = null;
+        this._artistsLoaded = false;
+        const card = document.getElementById('search-card');
+        const artistInput = document.getElementById('search-artist');
+        const wordInput = document.getElementById('search-word');
+        const showBtn = document.getElementById('btn-search-show');
+        const resetBtn = document.getElementById('btn-search-reset');
+
+        // Künstlerliste erst beim ersten Aufklappen laden
+        card.addEventListener('toggle', () => {
+            if (card.open && !this._artistsLoaded) {
+                this._artistsLoaded = true;
+                fetch('/api/artists')
+                    .then(r => r.json())
+                    .then(list => {
+                        const dl = document.getElementById('artist-list');
+                        dl.innerHTML = '';
+                        list.forEach(name => {
+                            const opt = document.createElement('option');
+                            opt.value = name;
+                            dl.appendChild(opt);
+                        });
+                    })
+                    .catch(() => {});
+            }
+        });
+
+        // Tippen → entprellte Trefferzahl-Abfrage (ändert den Rahmen nicht)
+        const onType = () => {
+            clearTimeout(this._searchTimer);
+            this._searchTimer = setTimeout(() => this._sendSearch(), 250);
+        };
+        artistInput.addEventListener('input', onType);
+        wordInput.addEventListener('input', onType);
+
+        showBtn.addEventListener('click', () => {
+            this.sendAction('search_show');
+        });
+        resetBtn.addEventListener('click', () => {
+            artistInput.value = '';
+            wordInput.value = '';
+            document.getElementById('search-count').innerHTML = '&nbsp;';
+            showBtn.disabled = true;
+            this.sendAction('search_reset');
+        });
+    }
+
+    _sendSearch() {
+        const kuenstler = document.getElementById('search-artist').value.trim();
+        const wort = document.getElementById('search-word').value.trim();
+        const countEl = document.getElementById('search-count');
+        const showBtn = document.getElementById('btn-search-show');
+        // Beide Felder leer → neutral: keine Abfrage, Rahmen unberührt
+        if (!kuenstler && !wort) {
+            countEl.innerHTML = '&nbsp;';
+            showBtn.disabled = true;
+            return;
+        }
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ action: 'search', kuenstler: kuenstler, wort: wort }));
+        }
+    }
+
+    _showSearchCount(count) {
+        const countEl = document.getElementById('search-count');
+        const showBtn = document.getElementById('btn-search-show');
+        if (count > 0) {
+            countEl.textContent = count + ' Treffer';
+            showBtn.disabled = false;
+        } else {
+            countEl.textContent = 'keine Treffer';
+            showBtn.disabled = true;
+        }
+    }
+
+    _applySearchState(active, count) {
+        // Suchmodus im Akkordeon-Titel spiegeln (auch nach Reconnect konsistent)
+        const summary = document.querySelector('#search-card .settings-header');
+        if (summary) summary.textContent = active ? ('Suche · aktiv (' + count + ')') : 'Suche';
+        if (active) document.getElementById('search-card').open = true;
     }
 
     // ── Status ───────────────────────────────────────

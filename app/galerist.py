@@ -11,6 +11,7 @@
 # Modified: 2026-08-02 - Keep-shallow-Puls (Deep-Standby vermeiden) + Blackout-Overlay an Betriebsstunden-Uebergaengen
 # Modified: 2026-08-02 - FB-Akku-Warnung als roter Header in der Infobox, Check beim Einschalten, gepinnt bis quittiert
 # Modified: 2026-08-03 - Overlay-Dauer 0-20s (0=kein Auto-Close); FB-Akku-Warnung zusaetzlich per fleet-notify (Einweg-Push)
+# Modified: 2026-08-21 - Suche: filterbare aktive Playlist (master/aktiv), WS-Actions search/search_show/search_reset, /api/artists, Overlay-Pin im Suchmodus
 
 import json
 import logging
@@ -21,6 +22,7 @@ import signal
 import subprocess
 import threading
 import time
+import unicodedata
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_sock import Sock, ConnectionClosed
@@ -57,6 +59,18 @@ def _dbg(msg):
         pass
 
 
+def _normalize(s: str) -> str:
+    """Suchnormalisierung: Diakritika falten und kleinschreiben.
+
+    So matcht 'monet' auf 'Monet' und 'seerose' als Substring auf 'Seerosen',
+    unabhängig von Groß-/Kleinschreibung und Akzenten (é→e, ä→a)."""
+    if not s:
+        return ''
+    s = unicodedata.normalize('NFKD', s)
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    return s.lower()
+
+
 class GaleristApp:
     """Zentrale Anwendung: Flask-Server, WebSocket, Bildrotation, Input-Handling."""
 
@@ -78,9 +92,15 @@ class GaleristApp:
             output=getattr(self.config, 'display_output', 'HDMI-A-1'),
         )
 
-        # Playlist
+        # Playlist: master = vollständige gemischte Liste (stabil), playlist = aktive
+        # Liste (== master im Normalbetrieb, == Treffermenge im Suchmodus).
+        self.master: list[str] = []
         self.playlist: list[str] = []
         self.current_index: int = 0
+        # Suchmodus: Flag + zuletzt berechnete (noch nicht angewandte) Treffer + Suchindex
+        self.search_active: bool = False
+        self._pending: list[str] = []
+        self._search_index: dict[str, dict] = {}
         self.paused: bool = False
         self.overlay_visible: bool = False
         # Bildhelligkeit (Dimm-Overlay): 100 = klar, 20 = stark gedimmt. Live via WS,
@@ -350,8 +370,12 @@ class GaleristApp:
         """Bildliste laden und zufällig mischen."""
         images = self.metadata_cache.get_image_list()
         random.shuffle(images)
-        self.playlist = images
+        self.master = images
+        self.playlist = self.master
         self.current_index = 0
+        self.search_active = False
+        self._pending = []
+        self._build_search_index()
         logger.info("Playlist: %d Bilder", len(self.playlist))
 
     def current_image_data(self) -> dict:
@@ -388,6 +412,97 @@ class GaleristApp:
         with self._lock:
             self.current_index = (self.current_index + direction) % len(self.playlist)
         self._broadcast({'type': 'show_image', **self.current_image_data()})
+
+    # ── Suche ─────────────────────────────────────────────────
+
+    def _build_search_index(self):
+        """Normalisierten Suchindex über alle Bilder aufbauen (einmalig je Playlist).
+
+        Pro Datei: ein Künstler-Feld und ein Textfeld (Titel + Originaltitel + Tags),
+        beide diakritika-gefaltet und kleingeschrieben — so ist jede Suche nur noch
+        ein Substring-Check ohne Pro-Tastendruck-Normalisierung des Bestands."""
+        idx = {}
+        for fn in self.master:
+            meta = self.metadata_cache.get_metadata(fn) or {}
+            tags = ' '.join(meta.get('such_tags') or [])
+            text = ' '.join([
+                meta.get('titel', '') or '',
+                meta.get('titel_original', '') or '',
+                tags,
+            ])
+            idx[fn] = {
+                'artist': _normalize(meta.get('kuenstler', '') or ''),
+                'text': _normalize(text),
+            }
+        self._search_index = idx
+
+    def _search_matches(self, kuenstler: str, wort: str) -> list:
+        """Treffer-Dateinamen für die Suchbegriffe (UND-Verknüpfung), in master-Reihenfolge.
+
+        Leere Begriffe werden ignoriert; sind beide leer, gibt es keine Treffer."""
+        kn = _normalize(kuenstler)
+        wn = _normalize(wort)
+        if not kn and not wn:
+            return []
+        result = []
+        for fn in self.master:
+            e = self._search_index.get(fn)
+            if not e:
+                continue
+            if kn and kn not in e['artist']:
+                continue
+            if wn and wn not in e['text']:
+                continue
+            result.append(fn)
+        return result
+
+    def _do_search_count(self, ws, kuenstler: str, wort: str):
+        """Treffer berechnen, als _pending merken und die Anzahl an den Anfrager melden.
+        Ändert den angezeigten Bestand NICHT — erst 'search_show' schaltet um."""
+        matches = self._search_matches(kuenstler, wort)
+        with self._lock:
+            self._pending = matches
+        try:
+            ws.send(json.dumps({'type': 'search_result', 'count': len(matches)},
+                                ensure_ascii=False))
+        except Exception:
+            pass
+
+    def _do_search_show(self):
+        """Zuletzt berechnete Treffermenge als aktive Playlist anwenden.
+        Öffnet die Infobox gepinnt (kein Auto-Close, solange search_active)."""
+        with self._lock:
+            pending = list(self._pending)
+        if not pending:
+            return
+        with self._lock:
+            self.playlist = pending
+            self.current_index = 0
+            self.search_active = True
+        self.overlay_visible = True
+        self._broadcast({'type': 'show_image', **self.current_image_data()})
+        self._broadcast({'type': 'show_overlay'})
+        self._broadcast({'type': 'search_state', 'active': True, 'count': len(pending)})
+        self._reset_timer()
+
+    def _do_search_reset(self):
+        """Suchmodus verlassen: vollen Bestand ab dem aktuell gezeigten Bild fortsetzen."""
+        with self._lock:
+            current_file = self.playlist[self.current_index] if self.playlist else None
+            self.playlist = self.master
+            if current_file and current_file in self.master:
+                self.current_index = self.master.index(current_file)
+            else:
+                self.current_index = 0
+            self.search_active = False
+            self._pending = []
+        self._broadcast({'type': 'show_image', **self.current_image_data()})
+        self._broadcast({'type': 'search_state', 'active': False, 'count': 0})
+        self._reset_timer()
+        # Normale Auto-Close-Semantik zurückgeben: sichtbare Infobox regulär ausblenden
+        if self.overlay_visible and self.config.overlay_duration_seconds > 0:
+            threading.Timer(self.config.overlay_duration_seconds,
+                            self._auto_hide_overlay).start()
 
     # ── Rotation-Timer ────────────────────────────────────────
 
@@ -530,7 +645,7 @@ class GaleristApp:
 
         Bei aktiver Akku-Warnung NICHT ausblenden — die bleibt gepinnt, bis manuell
         zugeklappt (= quittiert)."""
-        if self.overlay_visible and self._battery_warning is None:
+        if self.overlay_visible and self._battery_warning is None and not self.search_active:
             self.overlay_visible = False
             self._broadcast({'type': 'hide_overlay'})
 
@@ -664,6 +779,17 @@ class GaleristApp:
                 'current_image': self.current_image_data(),
             })
 
+        @self.app.route('/api/artists')
+        def artists():
+            """Distinct-Künstlerliste für die Autocomplete-Datalist der Suche."""
+            seen = set()
+            for fn in self.master:
+                meta = self.metadata_cache.get_metadata(fn) or {}
+                a = (meta.get('kuenstler') or '').strip()
+                if a and not a.startswith('http') and not re.match(r'^Q\d+$', a):
+                    seen.add(a)
+            return jsonify(sorted(seen))
+
         @self.app.route('/api/restart', methods=['POST'])
         def restart_service():
             """Galerist-Service per systemd neu starten."""
@@ -697,6 +823,8 @@ class GaleristApp:
                     ws.send(json.dumps({'type': 'show_overlay'}))
                 if self._battery_warning is not None:
                     ws.send(json.dumps({'type': 'battery_warning', 'percent': self._battery_warning}))
+                if self.search_active:
+                    ws.send(json.dumps({'type': 'search_state', 'active': True, 'count': len(self.playlist)}))
             except Exception:
                 pass
 
@@ -709,6 +837,12 @@ class GaleristApp:
                     action = msg.get('action', '')
                     if action == 'set_brightness':
                         self.set_brightness(msg.get('value'))
+                    elif action == 'search':
+                        self._do_search_count(ws, msg.get('kuenstler', ''), msg.get('wort', ''))
+                    elif action == 'search_show':
+                        self._do_search_show()
+                    elif action == 'search_reset':
+                        self._do_search_reset()
                     elif action:
                         self._handle_action(action)
             except (ConnectionClosed, ConnectionError):
