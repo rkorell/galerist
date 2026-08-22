@@ -7,6 +7,7 @@
 <!-- Modified: 2026-08-01 - Anzeigegeraet-Umschalter (Monitor/Fernseher) fuer display_backend -->
 <!-- Modified: 2026-08-02 - Layout: grosses Vorschaubild oben, Button-Reihe statt Windrose, Helligkeits-Slider -->
 <!-- Modified: 2026-08-21 - Such-Akkordeon (Kuenstler-Autocomplete + Suchwort, Trefferzahl live, Treffer anzeigen / zuruecksetzen) -->
+<!-- Modified: 2026-08-22 - Rahmen-Waehler (Buttons dynamisch aus /api/frames, keine hartkodierten Rahmen) -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -227,6 +228,20 @@
             color: white; box-shadow: 0 2px 10px rgba(217, 74, 74, 0.3);
         }
 
+        /* === Rahmen-Wähler === */
+        .frame-switch { display: flex; gap: 0.5rem; width: 100%; }
+        .frame-btn {
+            flex: 1; padding: 0.7rem; border-radius: 12px;
+            border: 2px solid var(--border-color); background: var(--bg-card);
+            color: var(--text-secondary); font-size: 0.95rem; font-weight: 600;
+            cursor: pointer; -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation; transition: all var(--transition-fast);
+        }
+        .frame-btn.active {
+            background: var(--accent); border-color: var(--accent); color: #fff;
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+
         /* === Suche === */
         .search-count {
             text-align: center; font-size: 0.9rem; font-weight: 600;
@@ -256,6 +271,9 @@
     </header>
 
     <main class="main">
+        <!-- Rahmen-Wähler: Buttons werden aus der Rahmen-Liste (config.json via /api/frames) erzeugt -->
+        <div class="frame-switch" id="frame-switch"></div>
+
         <!-- Vorschaubild (bildschirmbreit) -->
         <img id="preview-image" class="preview-image" src="" alt="">
 

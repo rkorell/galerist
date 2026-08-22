@@ -8,12 +8,21 @@
 // Modified: 2026-08-20 - Counter zeigt stabile Katalognummer (meta.katalog_nr) statt Shuffle-Position
 // Modified: 2026-08-20 - Originaltitel (meta.titel_original) in Klammern nach dem deutschen Titel
 // Modified: 2026-08-21 - Such-Akkordeon: live Trefferzahl (WS 'search'), 'Treffer anzeigen'/'zuruecksetzen', Kuenstler-Datalist via /api/artists
+// Modified: 2026-08-22 - Rahmen-Waehler (Galerist/TheFrame): WS + API auf gewaehlten Rahmen umlegen, Auswahl gemerkt (localStorage)
+// Modified: 2026-08-22 - Rahmen-Liste aus config.json via /api/frames (keine IPs im Code), Buttons dynamisch erzeugt
 
 class GaleristControl {
-    constructor() {
+    constructor(frames) {
         this.ws = null;
         this.reconnectDelay = 2000;
         this.previewEl = document.getElementById('preview-image');
+        // Rahmen-Liste kommt aus config.json (via /api/frames). Die App steuert EINEN
+        // Rahmen (nie beide zugleich). Fallback: nur der ausliefernde Rahmen.
+        this.frames = (frames && frames.length)
+            ? frames
+            : [{ id: 'self', name: 'Rahmen', host: location.host }];
+        this.frameId = this._resolveInitialFrame();
+        this._initFrameSwitch();
         this.connect();
         this._initButtons();
         this._initSettings();
@@ -25,22 +34,80 @@ class GaleristControl {
     // ── WebSocket ────────────────────────────────────
 
     connect() {
-        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        this.ws = new WebSocket(`${protocol}//${location.host}/ws`);
+        const f = this._frame();
+        const ws = new WebSocket('ws://' + f.host + '/ws');
+        this.ws = ws;
 
-        this.ws.onopen = () => {
-            this._showStatus('Verbunden', true);
+        ws.onopen = () => {
+            this._showStatus('Verbunden: ' + f.name, true);
         };
 
-        this.ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
             this._handleMessage(msg);
         };
 
-        this.ws.onclose = () => {
+        ws.onclose = () => {
+            if (this.ws !== ws) return;   // durch Rahmenwechsel ersetzt → nicht reconnecten
             this._showStatus('Verbindung getrennt...');
-            setTimeout(() => this.connect(), this.reconnectDelay);
+            setTimeout(() => { if (this.ws === ws) this.connect(); }, this.reconnectDelay);
         };
+    }
+
+    // ── Rahmen-Wähler ────────────────────────────────
+
+    _frame() {
+        return this.frames.find(f => f.id === this.frameId) || this.frames[0];
+    }
+
+    _apiBase() {
+        return 'http://' + this._frame().host;
+    }
+
+    _resolveInitialFrame() {
+        const saved = localStorage.getItem('galerist-frame');
+        if (saved && this.frames.some(f => f.id === saved)) return saved;
+        const here = this.frames.find(f => location.host === f.host);
+        if (here) return here.id;
+        return this.frames.length ? this.frames[0].id : 'self';
+    }
+
+    _initFrameSwitch() {
+        const box = document.getElementById('frame-switch');
+        if (!box) return;
+        box.innerHTML = '';
+        // Wähler nur zeigen, wenn mehr als ein Rahmen konfiguriert ist
+        if (this.frames.length < 2) { box.style.display = 'none'; return; }
+        box.style.display = '';
+        this.frames.forEach(f => {
+            const btn = document.createElement('button');
+            btn.className = 'frame-btn';
+            btn.dataset.frame = f.id;
+            btn.textContent = f.name;
+            btn.addEventListener('click', () => this._selectFrame(f.id));
+            box.appendChild(btn);
+        });
+        this._updateFrameButtons();
+    }
+
+    _updateFrameButtons() {
+        document.querySelectorAll('.frame-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.frame === this.frameId);
+        });
+    }
+
+    _selectFrame(id) {
+        if (id === this.frameId || !this.frames.some(f => f.id === id)) return;
+        this.frameId = id;
+        localStorage.setItem('galerist-frame', id);
+        this._updateFrameButtons();
+        this._resetSearchUI();
+        // WebSocket auf den neuen Rahmen umlegen (alten schließen, kein Reconnect des alten)
+        const old = this.ws;
+        this.ws = null;
+        if (old) { try { old.close(); } catch (e) { /* egal */ } }
+        this.connect();
+        this._loadSettings();
     }
 
     sendAction(action) {
@@ -188,14 +255,14 @@ class GaleristControl {
 
         document.getElementById('btn-restart').addEventListener('click', () => {
             if (!confirm('Service wirklich neu starten?')) return;
-            fetch('/api/restart', { method: 'POST' })
+            fetch(this._apiBase() + '/api/restart', { method: 'POST' })
                 .then(() => { this._showStatus('Neustart läuft...', true); })
                 .catch(() => { this._showStatus('Restart fehlgeschlagen'); });
         });
     }
 
     _loadSettings() {
-        fetch('/api/settings')
+        fetch(this._apiBase() + '/api/settings')
             .then(r => r.json())
             .then(data => {
                 // Intervall in Stunden + Minuten aufteilen
@@ -259,7 +326,7 @@ class GaleristControl {
         payload.display_brightness = parseInt(
             document.getElementById('setting-brightness').value, 10);
 
-        fetch('/api/settings', {
+        fetch(this._apiBase() + '/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -280,23 +347,9 @@ class GaleristControl {
         const showBtn = document.getElementById('btn-search-show');
         const resetBtn = document.getElementById('btn-search-reset');
 
-        // Künstlerliste erst beim ersten Aufklappen laden
+        // Künstlerliste beim Aufklappen laden (gehört zum aktiven Rahmen)
         card.addEventListener('toggle', () => {
-            if (card.open && !this._artistsLoaded) {
-                this._artistsLoaded = true;
-                fetch('/api/artists')
-                    .then(r => r.json())
-                    .then(list => {
-                        const dl = document.getElementById('artist-list');
-                        dl.innerHTML = '';
-                        list.forEach(name => {
-                            const opt = document.createElement('option');
-                            opt.value = name;
-                            dl.appendChild(opt);
-                        });
-                    })
-                    .catch(() => {});
-            }
+            if (card.open) this._loadArtists();
         });
 
         // Tippen → entprellte Trefferzahl-Abfrage (ändert den Rahmen nicht)
@@ -354,6 +407,42 @@ class GaleristControl {
         if (active) document.getElementById('search-card').open = true;
     }
 
+    _loadArtists() {
+        if (this._artistsLoaded) return;
+        this._artistsLoaded = true;
+        fetch(this._apiBase() + '/api/artists')
+            .then(r => r.json())
+            .then(list => {
+                const dl = document.getElementById('artist-list');
+                dl.innerHTML = '';
+                list.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    dl.appendChild(opt);
+                });
+            })
+            .catch(() => {});
+    }
+
+    _resetSearchUI() {
+        const a = document.getElementById('search-artist');
+        const w = document.getElementById('search-word');
+        if (a) a.value = '';
+        if (w) w.value = '';
+        const c = document.getElementById('search-count');
+        if (c) c.innerHTML = '&nbsp;';
+        const showBtn = document.getElementById('btn-search-show');
+        if (showBtn) showBtn.disabled = true;
+        const summary = document.querySelector('#search-card .settings-header');
+        if (summary) summary.textContent = 'Suche';
+        // Künstlerliste gehört zum Rahmen → zum Neuladen markieren
+        this._artistsLoaded = false;
+        const dl = document.getElementById('artist-list');
+        if (dl) dl.innerHTML = '';
+        const card = document.getElementById('search-card');
+        if (card && card.open) this._loadArtists();
+    }
+
     // ── Status ───────────────────────────────────────
 
     _showStatus(text, ok) {
@@ -367,5 +456,8 @@ class GaleristControl {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    new GaleristControl();
+    fetch('/api/frames')
+        .then(r => r.json())
+        .then(frames => new GaleristControl(frames))
+        .catch(() => new GaleristControl([]));
 });

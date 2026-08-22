@@ -12,6 +12,8 @@
 # Modified: 2026-08-02 - FB-Akku-Warnung als roter Header in der Infobox, Check beim Einschalten, gepinnt bis quittiert
 # Modified: 2026-08-03 - Overlay-Dauer 0-20s (0=kein Auto-Close); FB-Akku-Warnung zusaetzlich per fleet-notify (Einweg-Push)
 # Modified: 2026-08-21 - Suche: filterbare aktive Playlist (master/aktiv), WS-Actions search/search_show/search_reset, /api/artists, Overlay-Pin im Suchmodus
+# Modified: 2026-08-22 - CORS fuer die Steuer-App (nur die zwei Rahmen-Origins), damit sie den jeweils anderen Rahmen per fetch abfragen darf
+# Modified: 2026-08-22 - Rahmen-Liste + CORS-Origins aus config.json (frames) statt hartkodiert; /api/frames-Endpoint
 
 import json
 import logging
@@ -680,6 +682,22 @@ class GaleristApp:
     def _register_routes(self):
         """Flask-Routes und WebSocket-Endpoints registrieren."""
 
+        # CORS: erlaubt der Steuer-App, den jeweils ANDEREN Rahmen per fetch abzufragen
+        # (Einstellungen/Künstlerliste laufen über HTTP, nicht WebSocket). Erlaubte Origins
+        # werden aus der Rahmen-Liste (config.json 'frames') abgeleitet — kein Wildcard,
+        # keine IPs im Code, LAN-only.
+        _frames = getattr(self.config, 'frames', []) or []
+        _allowed_origins = {'http://' + f['host'] for f in _frames if f.get('host')}
+
+        @self.app.after_request
+        def _add_cors(resp):
+            origin = request.headers.get('Origin', '')
+            if origin in _allowed_origins:
+                resp.headers['Access-Control-Allow-Origin'] = origin
+                resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+                resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            return resp
+
         # ── Seiten ────────────────────────────────────────
 
         @self.app.route('/')
@@ -789,6 +807,11 @@ class GaleristApp:
                 if a and not a.startswith('http') and not re.match(r'^Q\d+$', a):
                     seen.add(a)
             return jsonify(sorted(seen))
+
+        @self.app.route('/api/frames')
+        def frames():
+            """Rahmen-Liste für den Rahmen-Wähler der Steuer-App (aus config.json)."""
+            return jsonify(getattr(self.config, 'frames', []) or [])
 
         @self.app.route('/api/restart', methods=['POST'])
         def restart_service():

@@ -23,5 +23,9 @@
     "db_host": "localhost",
     "db_name": "your_db",
     "db_user": "your_user",
-    "db_password": ""
+    "db_password": "",
+    "frames": [
+        {"id": "frame-a", "name": "Rahmen A", "host": "rahmen-a:5000"},
+        {"id": "frame-b", "name": "Rahmen B", "host": "rahmen-b:5000"}
+    ]
 }
