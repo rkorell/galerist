@@ -11,6 +11,7 @@
 // Modified: 2026-08-22 - Rahmen-Waehler (Galerist/TheFrame): WS + API auf gewaehlten Rahmen umlegen, Auswahl gemerkt (localStorage)
 // Modified: 2026-08-22 - Rahmen-Liste aus config.json via /api/frames (keine IPs im Code), Buttons dynamisch erzeugt
 // Modified: 2026-08-24 - Button "Service stoppen" (POST /api/stop)
+// Modified: 2026-08-24 - Button "Service auf <anderem Rahmen> starten" (POST /api/start_frame, Relais ueber laufenden Rahmen)
 
 class GaleristControl {
     constructor(frames) {
@@ -95,6 +96,21 @@ class GaleristControl {
         document.querySelectorAll('.frame-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.frame === this.frameId);
         });
+        this._updateStartButton();
+    }
+
+    _otherFrame() {
+        // Bei genau zwei Rahmen: der jeweils NICHT gewählte
+        return this.frames.find(f => f.id !== this.frameId) || null;
+    }
+
+    _updateStartButton() {
+        const btn = document.getElementById('btn-start-other');
+        if (!btn) return;
+        const other = this._otherFrame();
+        if (this.frames.length < 2 || !other) { btn.style.display = 'none'; return; }
+        btn.style.display = '';
+        btn.textContent = 'Service auf ' + other.name + ' starten';
     }
 
     _selectFrame(id) {
@@ -266,6 +282,20 @@ class GaleristControl {
             fetch(this._apiBase() + '/api/stop', { method: 'POST' })
                 .then(() => { this._showStatus('Service wird gestoppt...', true); })
                 .catch(() => { this._showStatus('Stopp fehlgeschlagen'); });
+        });
+
+        document.getElementById('btn-start-other').addEventListener('click', () => {
+            const other = this._otherFrame();
+            if (!other) return;
+            if (!confirm('Service auf ' + other.name + ' starten?')) return;
+            // Relais: der aktuell gewaehlte (laufende) Rahmen startet den anderen per SSH
+            fetch(this._apiBase() + '/api/start_frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ frame: other.id })
+            })
+            .then(() => { this._showStatus(other.name + ' wird gestartet...', true); })
+            .catch(() => { this._showStatus('Start fehlgeschlagen'); });
         });
     }
 

@@ -9,6 +9,9 @@
 <!-- Modified: 2026-08-21 - Such-Akkordeon (Kuenstler-Autocomplete + Suchwort, Trefferzahl live, Treffer anzeigen / zuruecksetzen) -->
 <!-- Modified: 2026-08-22 - Rahmen-Waehler (Buttons dynamisch aus /api/frames, keine hartkodierten Rahmen) -->
 <!-- Modified: 2026-08-24 - Button "Service stoppen" (POST /api/stop) -->
+<!-- Modified: 2026-08-24 - Button "Service auf <anderer Rahmen> starten" (POST /api/start_frame, Relais) -->
+<!-- Modified: 2026-08-24 - Button-Farben vereinheitlicht: nur Speichern blau, Rest neutral; Service-Gruppe per Abstand abgesetzt -->
+<!-- Modified: 2026-08-24 - Buttons alle grau; Reihenfolge Stoppen vor Neu-starten; Stop duenn rot umrandet, beide Start-Buttons duenn gruen; Gruppen-Abstaende -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -229,6 +232,10 @@
             color: white; box-shadow: 0 2px 10px rgba(217, 74, 74, 0.3);
         }
 
+        /* Service-Buttons: dünne farbige Umrandung als einziger Farbakzent */
+        #btn-stop { border-color: #c26a64; }                        /* leises Rot */
+        #btn-restart, #btn-start-other { border-color: #6aa980; }   /* leises Grün */
+
         /* === Rahmen-Wähler === */
         .frame-switch { display: flex; gap: 0.5rem; width: 100%; }
         .frame-btn {
@@ -380,10 +387,11 @@
                     <div class="radio-note">Änderung wirkt erst nach „Service neu starten".</div>
                 </div>
 
-                <button class="btn btn-primary" id="btn-save-settings">Speichern</button>
-                <button class="btn btn-secondary" id="btn-refresh-metadata">Metadaten aktualisieren</button>
-                <button class="btn btn-danger" id="btn-restart" style="margin-top: 0.5rem">Service neu starten</button>
-                <button class="btn btn-danger" id="btn-stop" style="margin-top: 0.5rem">Service stoppen</button>
+                <button class="btn btn-secondary" id="btn-save-settings">Speichern</button>
+                <button class="btn btn-secondary" id="btn-refresh-metadata" style="margin-top: 0.5rem">Metadaten aktualisieren</button>
+                <button class="btn btn-secondary" id="btn-stop" style="margin-top: 1.25rem">Service stoppen</button>
+                <button class="btn btn-secondary" id="btn-restart" style="margin-top: 1.25rem">Service neu starten</button>
+                <button class="btn btn-secondary" id="btn-start-other" style="margin-top: 0.5rem">Service auf anderem Rahmen starten</button>
             </div>
         </details>
 

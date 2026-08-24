@@ -15,6 +15,7 @@
 # Modified: 2026-08-22 - CORS fuer die Steuer-App (nur die zwei Rahmen-Origins), damit sie den jeweils anderen Rahmen per fetch abfragen darf
 # Modified: 2026-08-22 - Rahmen-Liste + CORS-Origins aus config.json (frames) statt hartkodiert; /api/frames-Endpoint
 # Modified: 2026-08-24 - /api/stop-Endpoint (Service stoppen) analog zu /api/restart
+# Modified: 2026-08-24 - /api/start_frame: startet den ANDEREN Rahmen per SSH (Relais), Ziel aus frames-Config
 
 import json
 import logging
@@ -835,6 +836,23 @@ class GaleristApp:
                 subprocess.Popen(['sudo', 'systemctl', 'stop', 'galerist.service'])
             threading.Thread(target=do_stop, daemon=True).start()
             return jsonify({'status': 'stopping'})
+
+        @self.app.route('/api/start_frame', methods=['POST'])
+        def start_frame():
+            """Startet galerist.service auf einem ANDEREN Rahmen per SSH (Relais).
+            Läuft auf dem noch aktiven Rahmen und wirft den gestoppten an. Die Ziel-IP
+            wird aus der frames-Config abgeleitet (Host ohne :5000)."""
+            data = request.json or {}
+            fid = data.get('frame')
+            frames = getattr(self.config, 'frames', []) or []
+            target = next((f for f in frames if f.get('id') == fid), None)
+            if not target or not target.get('host'):
+                return jsonify({'status': 'error', 'msg': 'unbekannter Rahmen'}), 400
+            host = target['host'].split(':')[0]  # IP/Hostname ohne Port
+            logger.info("Remote-Start von galerist.service auf %s (%s)", fid, host)
+            subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+                              'pi@' + host, 'sudo', 'systemctl', 'start', 'galerist.service'])
+            return jsonify({'status': 'starting', 'frame': fid})
 
         # ── WebSocket ─────────────────────────────────────
 
