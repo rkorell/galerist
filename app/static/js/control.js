@@ -10,6 +10,7 @@
 // Modified: 2026-08-21 - Such-Akkordeon: live Trefferzahl (WS 'search'), 'Treffer anzeigen'/'zuruecksetzen', Kuenstler-Datalist via /api/artists
 // Modified: 2026-08-22 - Rahmen-Waehler (Galerist/TheFrame): WS + API auf gewaehlten Rahmen umlegen, Auswahl gemerkt (localStorage)
 // Modified: 2026-08-22 - Rahmen-Liste aus config.json via /api/frames (keine IPs im Code), Buttons dynamisch erzeugt
+// Modified: 2026-08-24 - Button "Service stoppen" (POST /api/stop)
 
 class GaleristControl {
     constructor(frames) {
@@ -258,6 +259,13 @@ class GaleristControl {
             fetch(this._apiBase() + '/api/restart', { method: 'POST' })
                 .then(() => { this._showStatus('Neustart läuft...', true); })
                 .catch(() => { this._showStatus('Restart fehlgeschlagen'); });
+        });
+
+        document.getElementById('btn-stop').addEventListener('click', () => {
+            if (!confirm('Service wirklich stoppen?')) return;
+            fetch(this._apiBase() + '/api/stop', { method: 'POST' })
+                .then(() => { this._showStatus('Service wird gestoppt...', true); })
+                .catch(() => { this._showStatus('Stopp fehlgeschlagen'); });
         });
     }
 

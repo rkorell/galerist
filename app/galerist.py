@@ -14,6 +14,7 @@
 # Modified: 2026-08-21 - Suche: filterbare aktive Playlist (master/aktiv), WS-Actions search/search_show/search_reset, /api/artists, Overlay-Pin im Suchmodus
 # Modified: 2026-08-22 - CORS fuer die Steuer-App (nur die zwei Rahmen-Origins), damit sie den jeweils anderen Rahmen per fetch abfragen darf
 # Modified: 2026-08-22 - Rahmen-Liste + CORS-Origins aus config.json (frames) statt hartkodiert; /api/frames-Endpoint
+# Modified: 2026-08-24 - /api/stop-Endpoint (Service stoppen) analog zu /api/restart
 
 import json
 import logging
@@ -823,6 +824,17 @@ class GaleristApp:
                 subprocess.Popen(['sudo', 'systemctl', 'restart', 'galerist.service'])
             threading.Thread(target=do_restart, daemon=True).start()
             return jsonify({'status': 'restarting'})
+
+        @self.app.route('/api/stop', methods=['POST'])
+        def stop_service():
+            """Galerist-Service per systemd stoppen."""
+            logger.info("Service-Stopp angefordert via Web-App")
+            # Antwort zuerst senden, dann stoppen (der Stopp beendet diesen Prozess)
+            def do_stop():
+                time.sleep(1)
+                subprocess.Popen(['sudo', 'systemctl', 'stop', 'galerist.service'])
+            threading.Thread(target=do_stop, daemon=True).start()
+            return jsonify({'status': 'stopping'})
 
         # ── WebSocket ─────────────────────────────────────
 
