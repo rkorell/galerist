@@ -1,6 +1,6 @@
 # Galerist — Digitaler Bilderrahmen
 
-*Stand: 2026-08-20*
+*Stand: 2026-08-28*
 
 Ersatz für proprietäre digitale Bilderrahmen wie den Netgear Meural Canvas II auf einem Linux-Gerät mit Wayland. Zeigt eine kuratierte Bildersammlung im Vollbild, blendet Metadaten als Museums-Schild ein, lässt sich optional per Bluetooth-HID-Eingabegerät steuern. Liest die Anzeige-Metadaten direkt aus IPTC/XMP der JPEG-Dateien — **autark zur Laufzeit**, keine Datenbank, keine Netzwerk-Abhängigkeit.
 
@@ -10,6 +10,7 @@ Optimiert für RAM-arme Single-Board-Computer (Single-Process-Chromium für Syst
 
 ```
 galerist/
+├── deploy.sh                 Rollout von Code (und optional Bildern) auf die Rahmen
 └── app/
     ├── galerist.py            Haupt-Entry, WebSocket, Bildwechsel-Scheduler
     ├── config.py              Loader für config.json
@@ -48,6 +49,7 @@ galerist/
 | `operating_hours` | Display-Zeiten `on_time`/`off_time` (HH:MM, leer = immer an) |
 | `flask_host`, `flask_port` | Bind-Adresse + Port der Web-App |
 | `input_device` | `null` = Auto-Erkennung; expliziter `/dev/input/eventN` als Override |
+| `frames` | Liste ansteuerbarer Rahmen für die Mehr-Rahmen-Steuerung (je Eintrag `id`, `name`, `host`); zugleich Quelle der erlaubten CORS-Origins |
 | `log_level` | `INFO`, `DEBUG`, `WARNING`, ... |
 
 Nur für das Fernseher-Backend (`display_backend: cec`) relevant: `tv_keepshallow_minutes` / `tv_keepshallow_seconds` (kurzer CEC-Puls im Intervall, damit der TV nicht in nicht-weckbares Deep-Standby fällt). Für eine BT-Fernbedienung mit Akku-Meldung optional: `fb_battery_mac` und `fb_battery_warn_percent`.
@@ -68,6 +70,25 @@ Die **Betriebszeiten** (`operating_hours`) steuert ein event-getriebener Schedul
 
 Die **Helligkeit** ist ein Software-Dimmer: ein schwarzes Overlay legt sich gamma-korrigiert über das Bild (`opacity = 1 − (v/100)^1.4`, `v` = `display_brightness`, Bereich 20–100). Der Slider in der Web-App wirkt live per WebSocket. Hinweis: bei `display_brightness = 20` ist das Bild ~90 % abgedunkelt und **wirkt wie ausgeschaltet**, obwohl die Anzeige läuft.
 
+## Web-App (Steuerung)
+
+Unter `/galerist` liefert die App eine Web-Oberfläche zur Steuerung — Bildnavigation, Einstellungen, Suche und Service-Bedienung.
+
+### Mehr-Rahmen-Steuerung
+
+Mehrere autarke Rahmen lassen sich aus **einer** Web-App bedienen: ein Rahmen-Wähler oben schaltet, welchen Rahmen die App ansteuert — **kein Synchronbetrieb**, es wird immer genau ein Rahmen gesteuert. Die Rahmen-Liste und die erlaubten CORS-Origins kommen aus `config.json` (Schlüssel `frames`, je Eintrag `id`/`name`/`host`) und werden dem Frontend über `/api/frames` bereitgestellt; die Adressen liegen damit device-local und nicht im Code. Da jeder Rahmen dieselbe App ausliefert, funktioniert die Steuerung von jedem Rahmen aus.
+
+### Suche
+
+Ein Suchpanel filtert die Sammlung nach **Künstler** (Autocomplete über `/api/artists`) und/oder freiem **Suchwort**. Die Treffermenge wird angezeigt, bevor in die Ergebnisse gesprungen wird.
+
+### Service-Steuerung
+
+Der Anzeige-Dienst lässt sich aus der Web-App bedienen:
+
+- **Neu starten** / **Stoppen** des Dienstes auf dem gewählten Rahmen (`/api/restart`, `/api/stop`).
+- **Fernstart** eines gestoppten Rahmens über einen anderen, laufenden Rahmen (`/api/start_frame`): der laufende Rahmen startet den Dienst des Ziel-Rahmens per SSH. Nützlich, wenn ein Rahmen gestoppt wurde und seine eigene Web-App darum nicht mehr erreichbar ist.
+
 ## Service
 
 `app/systemd/galerist.service` als Vorlage — vor dem Aktivieren `WorkingDirectory`, `ExecStart`, `User`, `Environment` an die eigene Umgebung anpassen.
@@ -76,6 +97,18 @@ Wenn der Service als System-Service (nicht als User-Service) läuft, muss die An
 
 - **Wayland:** `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<UID>/bus` (und i.d.R. `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`)
 - **X11:** `DISPLAY=:0` und `XAUTHORITY=/home/<user>/.Xauthority`
+
+## Deployment
+
+`deploy.sh` verteilt den Code (und auf Wunsch die Bildersammlung) per rsync auf die Rahmen und startet den Dienst neu. `config.json` wird dabei **nie** angefasst (device-local, pro Rahmen verschieden).
+
+```bash
+./deploy.sh                  # Code auf alle Rahmen, Dienst-Neustart
+./deploy.sh --images         # zusätzlich die Bilder (mit Metadaten-Cache-Rebuild)
+./deploy.sh <rahmen>         # nur einen bestimmten Rahmen
+```
+
+Die Rahmen werden über SSH-Aliase angesprochen; die Zielliste steht oben im Script.
 
 ## Bluetooth-Fernbedienung (optional)
 
