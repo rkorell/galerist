@@ -17,6 +17,7 @@
 # Modified: 2026-08-24 - /api/stop-Endpoint (Service stoppen) analog zu /api/restart
 # Modified: 2026-08-24 - /api/start_frame: startet den ANDEREN Rahmen per SSH (Relais), Ziel aus frames-Config
 # Modified: 2026-09-19 - Ambient-Helligkeitsregelung: display_brightness folgt Senvolon-'light' (MQTT, 1:1 geklemmt), fail-safe
+# Modified: 2026-09-19 - Ambient in PWA steuerbar: Toggle + min/max in /api/settings GET+POST; Werte read-once beim Start, greifen nach Service-Neustart (kein Pro-Runde-Nachlesen)
 
 import json
 import logging
@@ -372,6 +373,10 @@ class GaleristApp:
         [ambient_light_min, ambient_light_max]. Der Senvolon meldet 'light'
         etwa im selben Wertebereich wie das Dimm-Overlay (20 = dunkel, 70 = Decke),
         daher die direkte Übernahme.
+
+        Schalter und Grenzen (enabled/min/max) werden EINMAL beim Service-Start
+        gelesen — kein Pro-Runde-Nachlesen (unnötiger Overhead). PWA-Änderungen
+        greifen nach Service-Neustart (wie display_backend).
 
         Läuft nur, solange das Display an sein soll. Bei jedem Fehler (MQTT nicht
         erreichbar, kein Wert) bleibt die Helligkeit unverändert — die Autarkie
@@ -796,6 +801,9 @@ class GaleristApp:
                 'operating_hours': self.config.operating_hours,
                 'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
                 'display_brightness': self._brightness,
+                'ambient_brightness_enabled': getattr(self.config, 'ambient_brightness_enabled', True),
+                'ambient_light_min': getattr(self.config, 'ambient_light_min', 20),
+                'ambient_light_max': getattr(self.config, 'ambient_light_max', 70),
             })
 
         @self.app.route('/api/settings', methods=['POST'])
@@ -833,6 +841,26 @@ class GaleristApp:
                     updates['display_brightness'] = val
                     self._brightness = val
 
+            if 'ambient_brightness_enabled' in data:
+                updates['ambient_brightness_enabled'] = bool(data['ambient_brightness_enabled'])
+
+            if 'ambient_light_min' in data:
+                val = int(data['ambient_light_min'])
+                if 20 <= val <= 100:
+                    updates['ambient_light_min'] = val
+
+            if 'ambient_light_max' in data:
+                val = int(data['ambient_light_max'])
+                if 20 <= val <= 100:
+                    updates['ambient_light_max'] = val
+
+            # Untergrenze darf die Obergrenze nicht ueberschreiten
+            lo = updates.get('ambient_light_min', getattr(self.config, 'ambient_light_min', 20))
+            hi = updates.get('ambient_light_max', getattr(self.config, 'ambient_light_max', 70))
+            if lo > hi:
+                updates.pop('ambient_light_min', None)
+                updates.pop('ambient_light_max', None)
+
             if updates:
                 self.config.update_many(updates)
                 self._reset_timer()
@@ -844,6 +872,9 @@ class GaleristApp:
                 'operating_hours': self.config.operating_hours,
                 'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
                 'display_brightness': self._brightness,
+                'ambient_brightness_enabled': getattr(self.config, 'ambient_brightness_enabled', True),
+                'ambient_light_min': getattr(self.config, 'ambient_light_min', 20),
+                'ambient_light_max': getattr(self.config, 'ambient_light_max', 70),
             }})
 
         @self.app.route('/api/status')

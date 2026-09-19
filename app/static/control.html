@@ -12,6 +12,7 @@
 <!-- Modified: 2026-08-24 - Button "Service auf <anderer Rahmen> starten" (POST /api/start_frame, Relais) -->
 <!-- Modified: 2026-08-24 - Button-Farben vereinheitlicht: nur Speichern blau, Rest neutral; Service-Gruppe per Abstand abgesetzt -->
 <!-- Modified: 2026-08-24 - Buttons alle grau; Reihenfolge Stoppen vor Neu-starten; Stop duenn rot umrandet, beide Start-Buttons duenn gruen; Gruppen-Abstaende -->
+<!-- Modified: 2026-09-19 - Auto-Helligkeit: Toggle + min/max-Grenzen im Einstellungen-Panel -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -165,6 +166,7 @@
 
         .field { margin-bottom: 1.25rem; }
         .field:last-child { margin-bottom: 0; }
+        .field-disabled { opacity: 0.4; pointer-events: none; }
         .field-label {
             display: block; font-size: 0.8rem; color: var(--text-muted);
             margin-bottom: 0.4rem; font-weight: 500;
@@ -356,11 +358,36 @@
                     <input type="range" id="setting-overlay-duration" min="0" max="20" step="1" value="10">
                 </div>
 
-                <div class="field">
+                <div class="field" id="brightness-field">
                     <span class="field-label">Helligkeit</span>
                     <div class="field-value" id="brightness-display">100 %</div>
                     <input type="range" id="setting-brightness" min="20" max="100" step="5" value="100">
                     <div class="radio-note">Wirkt sofort; „Speichern" merkt den Wert dauerhaft.</div>
+                </div>
+
+                <div class="field">
+                    <label class="radio-row">
+                        <input type="checkbox" id="setting-ambient-enabled">
+                        Auto-Helligkeit <span class="radio-hint">— folgt dem Raumlicht</span>
+                    </label>
+                    <div class="radio-note">Ist die Automatik an, wird die Helligkeit oben automatisch geregelt; der manuelle Regler ruht. Änderung wirkt erst nach „Service neu starten".</div>
+                </div>
+
+                <div class="field" id="ambient-range-field">
+                    <span class="field-label">Auto-Helligkeit: Grenzen</span>
+                    <div class="slider-row">
+                        <div class="field">
+                            <span class="field-label">dunkel (min)</span>
+                            <div class="field-value" id="ambient-min-display">20 %</div>
+                            <input type="range" id="setting-ambient-min" min="20" max="100" step="5" value="20">
+                        </div>
+                        <div class="field">
+                            <span class="field-label">hell (max)</span>
+                            <div class="field-value" id="ambient-max-display">70 %</div>
+                            <input type="range" id="setting-ambient-max" min="20" max="100" step="5" value="70">
+                        </div>
+                    </div>
+                    <div class="radio-note">Unter-/Obergrenze der automatischen Dimmung. „Speichern" merkt die Werte; sie wirken nach „Service neu starten".</div>
                 </div>
 
                 <div class="field-row">

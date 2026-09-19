@@ -12,6 +12,7 @@
 // Modified: 2026-08-22 - Rahmen-Liste aus config.json via /api/frames (keine IPs im Code), Buttons dynamisch erzeugt
 // Modified: 2026-08-24 - Button "Service stoppen" (POST /api/stop)
 // Modified: 2026-08-24 - Button "Service auf <anderem Rahmen> starten" (POST /api/start_frame, Relais ueber laufenden Rahmen)
+// Modified: 2026-09-19 - Auto-Helligkeit: Toggle + min/max-Grenzen in Settings; schaltet manuellen Regler/Grenzen gegenseitig frei
 
 class GaleristControl {
     constructor(frames) {
@@ -261,6 +262,23 @@ class GaleristControl {
             this._sendBrightness(parseInt(bSlider.value, 10));
         });
 
+        // Auto-Helligkeit: Toggle schaltet zwischen manuellem Regler und Grenzen
+        document.getElementById('setting-ambient-enabled').addEventListener('change', () => {
+            this._applyAmbientUiState();
+        });
+
+        // Auto-Grenzen: Anzeige aktualisieren, min darf max nicht ueberholen
+        const aMin = document.getElementById('setting-ambient-min');
+        const aMax = document.getElementById('setting-ambient-max');
+        aMin.addEventListener('input', () => {
+            if (parseInt(aMin.value, 10) > parseInt(aMax.value, 10)) aMax.value = aMin.value;
+            this._updateAmbientDisplays();
+        });
+        aMax.addEventListener('input', () => {
+            if (parseInt(aMax.value, 10) < parseInt(aMin.value, 10)) aMin.value = aMax.value;
+            this._updateAmbientDisplays();
+        });
+
         // Buttons
         document.getElementById('btn-save-settings').addEventListener('click', () => {
             this._saveSettings();
@@ -338,6 +356,16 @@ class GaleristControl {
                 document.getElementById('setting-brightness').value = brightness;
                 document.getElementById('brightness-display').textContent =
                     brightness + ' %';
+
+                // Auto-Helligkeit (Toggle + Grenzen)
+                document.getElementById('setting-ambient-enabled').checked =
+                    data.ambient_brightness_enabled !== false;
+                document.getElementById('setting-ambient-min').value =
+                    data.ambient_light_min != null ? data.ambient_light_min : 20;
+                document.getElementById('setting-ambient-max').value =
+                    data.ambient_light_max != null ? data.ambient_light_max : 70;
+                this._updateAmbientDisplays();
+                this._applyAmbientUiState();
             })
             .catch(() => {
                 this._showStatus('Einstellungen nicht ladbar');
@@ -364,6 +392,13 @@ class GaleristControl {
         payload.display_brightness = parseInt(
             document.getElementById('setting-brightness').value, 10);
 
+        payload.ambient_brightness_enabled =
+            document.getElementById('setting-ambient-enabled').checked;
+        payload.ambient_light_min = parseInt(
+            document.getElementById('setting-ambient-min').value, 10);
+        payload.ambient_light_max = parseInt(
+            document.getElementById('setting-ambient-max').value, 10);
+
         fetch(this._apiBase() + '/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -372,6 +407,23 @@ class GaleristControl {
         .then(r => r.json())
         .then(() => { this._showStatus('Gespeichert', true); })
         .catch(() => { this._showStatus('Fehler beim Speichern'); });
+    }
+
+    _updateAmbientDisplays() {
+        document.getElementById('ambient-min-display').textContent =
+            document.getElementById('setting-ambient-min').value + ' %';
+        document.getElementById('ambient-max-display').textContent =
+            document.getElementById('setting-ambient-max').value + ' %';
+    }
+
+    _applyAmbientUiState() {
+        // Automatik an → manueller Regler ruht; Automatik aus → Grenzen ruhen.
+        const on = document.getElementById('setting-ambient-enabled').checked;
+        document.getElementById('brightness-field').classList.toggle('field-disabled', on);
+        document.getElementById('setting-brightness').disabled = on;
+        document.getElementById('ambient-range-field').classList.toggle('field-disabled', !on);
+        document.getElementById('setting-ambient-min').disabled = !on;
+        document.getElementById('setting-ambient-max').disabled = !on;
     }
 
     // ── Suche ─────────────────────────────────────────
