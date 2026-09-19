@@ -16,6 +16,7 @@
 # Modified: 2026-08-22 - Rahmen-Liste + CORS-Origins aus config.json (frames) statt hartkodiert; /api/frames-Endpoint
 # Modified: 2026-08-24 - /api/stop-Endpoint (Service stoppen) analog zu /api/restart
 # Modified: 2026-08-24 - /api/start_frame: startet den ANDEREN Rahmen per SSH (Relais), Ziel aus frames-Config
+# Modified: 2026-09-19 - Ambient-Helligkeitsregelung: display_brightness folgt Senvolon-'light' (MQTT, 1:1 geklemmt), fail-safe
 
 import json
 import logging
@@ -23,6 +24,7 @@ import os
 import random
 import re
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -31,6 +33,7 @@ import unicodedata
 from flask import Flask, jsonify, request, send_from_directory
 from flask_sock import Sock, ConnectionClosed
 
+import ambient_light
 from config import Config
 from metadata_cache import MetadataCache
 from display_control import DisplayControl
@@ -46,6 +49,20 @@ logger = logging.getLogger('galerist')
 
 # Werkzeug (HTTP-Requests) und andere Libs nur bei Warnungen
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
+
+# Ambient-Helligkeitsregelung — feste Infrastruktur (aendert sich nicht, daher
+# Konstante statt Config). Tunbar bleiben nur die zwei Kalibrier-Werte
+# ambient_light_min/ambient_light_max in config.json.
+# Sensor-Vertrag: der Senvolon-Praesenzsensor publisht seinen kompletten Zustand
+# als retained JSON auf diesem Topic; die Umgebungshelligkeit steckt darin unter
+# dem Schluessel 'light' (Wertebereich ca. 0..100). Beides gehoert zusammen.
+_AMBIENT_MQTT_HOST = 'magicmirror.local'   # Mosquitto-Broker (mDNS, loest per avahi auf)
+_AMBIENT_MQTT_PORT = 1883
+_AMBIENT_MQTT_TOPIC = 'tele/senvolon/STATE'
+_AMBIENT_MQTT_FIELD = 'light'          # JSON-Schluessel im STATE-Payload
+_AMBIENT_POLL_SECONDS = 60             # Regeltakt
+_AMBIENT_DEADBAND = 3                  # erst ab dieser Differenz nachsetzen (Zappel-Schutz)
 
 
 # DEBUG-Instrumentierung — in gemeinsame Datei mit input_handler.
@@ -158,6 +175,7 @@ class GaleristApp:
         self._start_chromium()
         self._start_chromium_watchdog()
         self._start_tv_keepshallow()
+        self._start_ambient_brightness()
 
         logger.info("Galerist gestartet: %d Bilder, Intervall %ds, Port %d",
                      len(self.playlist),
@@ -346,6 +364,48 @@ class GaleristApp:
                 time.sleep(interval)
 
         threading.Thread(target=loop, daemon=True, name='TVKeepShallow').start()
+
+    def _start_ambient_brightness(self):
+        """Regelt die Bildhelligkeit nach Umgebungslicht (Senvolon via MQTT).
+
+        1:1-Kennlinie: display_brightness = light, geklemmt auf
+        [ambient_light_min, ambient_light_max]. Der Senvolon meldet 'light'
+        etwa im selben Wertebereich wie das Dimm-Overlay (20 = dunkel, 70 = Decke),
+        daher die direkte Übernahme.
+
+        Läuft nur, solange das Display an sein soll. Bei jedem Fehler (MQTT nicht
+        erreichbar, kein Wert) bleibt die Helligkeit unverändert — die Autarkie
+        der Bildanzeige wird nicht angetastet. Kein Disk-Write (set_brightness
+        setzt live), der persistierte display_brightness bleibt der Startwert.
+        """
+        if not getattr(self.config, 'ambient_brightness_enabled', True):
+            logger.info("Ambient-Helligkeitsregelung deaktiviert (Config)")
+            return
+
+        light_min = int(getattr(self.config, 'ambient_light_min', 20))
+        light_max = int(getattr(self.config, 'ambient_light_max', 70))
+        client_id = f"galerist-ambient-{socket.gethostname()}"
+
+        def loop():
+            last_applied = None
+            while True:
+                try:
+                    # Nur regeln, wenn das Display an ist (oder Zustand noch unbekannt).
+                    if self.display_control.display_on is not False:
+                        light = ambient_light.fetch_light(
+                            _AMBIENT_MQTT_HOST, _AMBIENT_MQTT_PORT,
+                            _AMBIENT_MQTT_TOPIC, _AMBIENT_MQTT_FIELD, client_id)
+                        if light is not None:
+                            target = max(light_min, min(light_max, light))
+                            if last_applied is None or abs(target - last_applied) >= _AMBIENT_DEADBAND:
+                                self.set_brightness(target)
+                                last_applied = target
+                                logger.info("Ambient: light=%d → Helligkeit %d", light, target)
+                except Exception as e:
+                    logger.error("Ambient-Regelung Fehler: %s", e)
+                time.sleep(_AMBIENT_POLL_SECONDS)
+
+        threading.Thread(target=loop, daemon=True, name='AmbientBrightness').start()
 
     def _shutdown(self, signum, frame):
         """Signal-Handler für sauberes Beenden."""
