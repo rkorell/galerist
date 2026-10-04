@@ -13,6 +13,9 @@
 // Modified: 2026-08-24 - Button "Service stoppen" (POST /api/stop)
 // Modified: 2026-08-24 - Button "Service auf <anderem Rahmen> starten" (POST /api/start_frame, Relais ueber laufenden Rahmen)
 // Modified: 2026-09-19 - Auto-Helligkeit: Toggle + min/max-Grenzen in Settings; schaltet manuellen Regler/Grenzen gegenseitig frei
+// Modified: 2026-09-20 - Auto-Helligkeit: interaktiver Kurveneditor (3-Anker light->Helligkeit) mit Drag + Vorschau-Slider; loest min/max-Slider ab
+// Modified: 2026-09-20 - Kurveneditor: 5 freie Werte (auch Schwellen), y 20-80, x-Wortachse, weisser Live-Punkt (WS ambient_light), Live-Schalter, Kalibriermodus treibt Schirm; Vorschau-Slider raus
+// Modified: 2026-09-20 - Helligkeitsregler justiert rueckwaerts die Kennlinie (naechster Anker); Live-Sensorzahl in Erklaerung; Chips 1-zeilig (dunkel/Licht ab/Licht/Tag ab/Tag); default light_hi 60
 
 class GaleristControl {
     constructor(frames) {
@@ -153,6 +156,9 @@ class GaleristControl {
             case 'search_state':
                 this._applySearchState(msg.active, msg.count);
                 break;
+            case 'ambient_light':
+                this._setAmbientLight(msg.light);
+                break;
         }
     }
 
@@ -254,30 +260,27 @@ class GaleristControl {
                 oSlider.value === '0' ? 'aus (bleibt offen)' : oSlider.value + ' Sek';
         });
 
-        // Helligkeit-Slider → Anzeige + live ans Display senden
+        // Helligkeit-Slider → Anzeige + live ans Display; im Kalibriermodus (Auto aus)
+        // justiert er zusätzlich rückwärts die Kennlinie (Punkt bei aktueller Raumhelligkeit).
         const bSlider = document.getElementById('setting-brightness');
         bSlider.addEventListener('input', () => {
-            document.getElementById('brightness-display').textContent =
-                bSlider.value + ' %';
-            this._sendBrightness(parseInt(bSlider.value, 10));
+            const v = parseInt(bSlider.value, 10);
+            document.getElementById('brightness-display').textContent = v + ' %';
+            this._sendBrightness(v);
+            if (!document.getElementById('setting-ambient-enabled').checked) {
+                this._ambientReverse(v);
+            }
         });
 
-        // Auto-Helligkeit: Toggle schaltet zwischen manuellem Regler und Grenzen
-        document.getElementById('setting-ambient-enabled').addEventListener('change', () => {
+        // Auto-Helligkeit: Toggle wirkt LIVE (schaltet die Regelung am Dienst an/aus)
+        // und schaltet manuellen Regler ⇄ Kalibrierung frei.
+        document.getElementById('setting-ambient-enabled').addEventListener('change', (e) => {
+            this._sendAmbientEnable(e.target.checked);
             this._applyAmbientUiState();
         });
 
-        // Auto-Grenzen: Anzeige aktualisieren, min darf max nicht ueberholen
-        const aMin = document.getElementById('setting-ambient-min');
-        const aMax = document.getElementById('setting-ambient-max');
-        aMin.addEventListener('input', () => {
-            if (parseInt(aMin.value, 10) > parseInt(aMax.value, 10)) aMax.value = aMin.value;
-            this._updateAmbientDisplays();
-        });
-        aMax.addEventListener('input', () => {
-            if (parseInt(aMax.value, 10) < parseInt(aMin.value, 10)) aMin.value = aMax.value;
-            this._updateAmbientDisplays();
-        });
+        // Kurveneditor initialisieren (Kennlinie-Anker + Vorschau-Slider)
+        this._initAmbientCurve();
 
         // Buttons
         document.getElementById('btn-save-settings').addEventListener('click', () => {
@@ -357,14 +360,16 @@ class GaleristControl {
                 document.getElementById('brightness-display').textContent =
                     brightness + ' %';
 
-                // Auto-Helligkeit (Toggle + Grenzen)
+                // Auto-Helligkeit (Toggle + Kennlinie-Anker)
                 document.getElementById('setting-ambient-enabled').checked =
                     data.ambient_brightness_enabled !== false;
-                document.getElementById('setting-ambient-min').value =
-                    data.ambient_light_min != null ? data.ambient_light_min : 20;
-                document.getElementById('setting-ambient-max').value =
-                    data.ambient_light_max != null ? data.ambient_light_max : 70;
-                this._updateAmbientDisplays();
+                const c = this._curve;
+                c.dark = data.ambient_dim_dark != null ? data.ambient_dim_dark : 35;
+                c.T    = data.ambient_light_t   != null ? data.ambient_light_t   : 10;
+                c.lit  = data.ambient_dim_lit   != null ? data.ambient_dim_lit   : 45;
+                c.hi   = data.ambient_light_hi  != null ? data.ambient_light_hi  : 60;
+                c.max  = data.ambient_dim_max   != null ? data.ambient_dim_max   : 68;
+                this._renderAmbientCurve();
                 this._applyAmbientUiState();
             })
             .catch(() => {
@@ -394,10 +399,12 @@ class GaleristControl {
 
         payload.ambient_brightness_enabled =
             document.getElementById('setting-ambient-enabled').checked;
-        payload.ambient_light_min = parseInt(
-            document.getElementById('setting-ambient-min').value, 10);
-        payload.ambient_light_max = parseInt(
-            document.getElementById('setting-ambient-max').value, 10);
+        const c = this._curve;
+        payload.ambient_dim_dark = Math.round(c.dark);
+        payload.ambient_light_t  = Math.round(c.T);
+        payload.ambient_dim_lit  = Math.round(c.lit);
+        payload.ambient_light_hi = Math.round(c.hi);
+        payload.ambient_dim_max  = Math.round(c.max);
 
         fetch(this._apiBase() + '/api/settings', {
             method: 'POST',
@@ -409,21 +416,171 @@ class GaleristControl {
         .catch(() => { this._showStatus('Fehler beim Speichern'); });
     }
 
-    _updateAmbientDisplays() {
-        document.getElementById('ambient-min-display').textContent =
-            document.getElementById('setting-ambient-min').value + ' %';
-        document.getElementById('ambient-max-display').textContent =
-            document.getElementById('setting-ambient-max').value + ' %';
-    }
-
     _applyAmbientUiState() {
-        // Automatik an → manueller Regler ruht; Automatik aus → Grenzen ruhen.
+        // Auto AN: Automatik regelt → manueller Regler + Kalibrierung ruhen.
+        // Auto AUS (= Kalibriermodus): beide bedienbar, nichts überschreibt.
         const on = document.getElementById('setting-ambient-enabled').checked;
         document.getElementById('brightness-field').classList.toggle('field-disabled', on);
         document.getElementById('setting-brightness').disabled = on;
-        document.getElementById('ambient-range-field').classList.toggle('field-disabled', !on);
-        document.getElementById('setting-ambient-min').disabled = !on;
-        document.getElementById('setting-ambient-max').disabled = !on;
+        document.getElementById('ambient-cal').classList.toggle('field-disabled', on);
+    }
+
+    _sendAmbientEnable(on) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ action: 'ambient_enable', value: on }));
+        }
+    }
+
+    // ── Auto-Helligkeit: Kurveneditor (Raumhelligkeit → Bildhelligkeit) ───
+
+    _initAmbientCurve() {
+        // 5 gespeicherte Werte: dark (Höhe bei Licht 0), T (Schwelle Zimmerlicht),
+        // lit (Höhe bei T), hi (Schwelle voller Tag), max (Höhe bei hi).
+        this._curve = { dark: 35, T: 10, lit: 45, hi: 93, max: 68 };
+        this._liveLight = null;       // aktueller Sensorwert (weißer Punkt), vom Dienst per WS
+        this._acDrag = null;
+        const svg = document.getElementById('ambient-plot');
+        this._acSvg = svg;
+
+        const pt = (evt) => {
+            const r = svg.getBoundingClientRect();
+            return { x: (evt.clientX - r.left) / r.width * 380, y: (evt.clientY - r.top) / r.height * 264 };
+        };
+        svg.addEventListener('pointerdown', (e) => {
+            const g = e.target.closest('.handle'); if (!g) return;
+            this._acDrag = g.getAttribute('data-id'); svg.setPointerCapture(e.pointerId); e.preventDefault();
+        });
+        svg.addEventListener('pointermove', (e) => {
+            if (!this._acDrag) return;
+            const p = pt(e), c = this._curve;
+            const b = Math.round(this._acInvB(p.y)), l = Math.round(this._acInvL(p.x));
+            if (this._acDrag === 'dark') {
+                c.dark = Math.max(20, Math.min(c.lit, b));              // fest links, nur hoch/runter
+            } else if (this._acDrag === 'lit') {
+                c.lit = Math.max(c.dark, Math.min(c.max, b));
+                c.T = Math.max(1, Math.min(c.hi - 1, l));
+            } else if (this._acDrag === 'max') {
+                c.max = Math.max(c.lit, Math.min(80, b));
+                c.hi = Math.max(c.T + 1, Math.min(100, l));
+            }
+            this._renderAmbientCurve();
+            this._ambientPreviewToScreen();
+        });
+        const end = () => { this._acDrag = null; };
+        svg.addEventListener('pointerup', end);
+        svg.addEventListener('pointercancel', end);
+
+        this._renderAmbientCurve();
+    }
+
+    _acLX(l) { return 44 + (l / 100) * (360 - 44); }
+    _acLY(b) { return 18 + (80 - b) / (80 - 20) * (214 - 18); }
+    _acInvL(px) { return Math.max(0, Math.min(100, (px - 44) / (360 - 44) * 100)); }
+    _acInvB(py) { return Math.max(20, Math.min(80, 80 - (py - 18) / (214 - 18) * (80 - 20))); }
+
+    _ambientBriFor(l) {
+        const c = this._curve;
+        if (l <= 0) return c.dark;
+        if (l >= c.hi) return c.max;
+        if (l <= c.T) return c.dark + (l / c.T) * (c.lit - c.dark);
+        return c.lit + ((l - c.T) / (c.hi - c.T)) * (c.max - c.lit);
+    }
+
+    // Kalibriermodus (Automatik aus): Schirm live auf Kurve(aktuelles Licht) setzen
+    // und den Helligkeitsregler nachziehen (nach direktem Punkt-Ziehen).
+    _ambientPreviewToScreen() {
+        if (this._liveLight == null) return;
+        if (document.getElementById('setting-ambient-enabled').checked) return;
+        const b = Math.round(this._ambientBriFor(this._liveLight));
+        this._sendBrightness(b);
+        document.getElementById('setting-brightness').value = b;
+        document.getElementById('brightness-display').textContent = b + ' %';
+    }
+
+    // Rückwärts: gewünschte Helligkeit B bei der aktuellen Raumhelligkeit → passende
+    // Konstante (nächster Anker, vertikal) so berechnen, dass Kurve(aktuelles Licht) = B.
+    _ambientReverse(B) {
+        if (this._liveLight == null) return;
+        const c = this._curve, l = this._liveLight;
+        const cl = v => Math.max(20, Math.min(80, v));
+        if (l <= 0) { c.dark = cl(B); }
+        else if (l >= c.hi) { c.max = cl(B); }
+        else if (l <= c.T) {
+            const f = l / c.T;
+            if (l <= c.T / 2) c.dark = cl((B - c.lit * f) / ((1 - f) || 1));
+            else c.lit = cl((B - c.dark * (1 - f)) / (f || 1));
+        } else {
+            const g = (l - c.T) / ((c.hi - c.T) || 1), mid = (c.T + c.hi) / 2;
+            if (l <= mid) c.lit = cl((B - c.max * g) / ((1 - g) || 1));
+            else c.max = cl((B - c.lit * (1 - g)) / (g || 1));
+        }
+        this._renderAmbientCurve();
+    }
+
+    // Aktueller Sensorwert vom Dienst → weißer Punkt + Anzeige nachführen.
+    _setAmbientLight(light) {
+        this._liveLight = light;
+        if (this._acSvg) this._renderAmbientCurve();
+    }
+
+    _renderAmbientCurve() {
+        const NS = 'http://www.w3.org/2000/svg';
+        const svg = this._acSvg, c = this._curve;
+        const mk = (tag, attrs, text) => {
+            const e = document.createElementNS(NS, tag);
+            for (const k in attrs) e.setAttribute(k, attrs[k]);
+            if (text != null) e.textContent = text;
+            return e;
+        };
+        svg.innerHTML = '';
+        // Gitter + y-Beschriftung (Bildhelligkeit %, 20–80)
+        for (let b = 20; b <= 80; b += 10) {
+            svg.appendChild(mk('line', { class: 'grid', x1: this._acLX(0), y1: this._acLY(b), x2: this._acLX(100), y2: this._acLY(b) }));
+            svg.appendChild(mk('text', { class: 'axis-lab', x: this._acLX(0) - 6, y: this._acLY(b) + 3, 'text-anchor': 'end' }, b));
+        }
+        for (let l = 0; l <= 100; l += 25) {
+            svg.appendChild(mk('line', { class: 'grid', x1: this._acLX(l), y1: this._acLY(80), x2: this._acLX(l), y2: this._acLY(20) }));
+        }
+        // Achsentitel: y = Bild %, x = Raumhelligkeit (Worte, keine Zahlen)
+        svg.appendChild(mk('text', { class: 'axis-lab', x: this._acLX(0) - 6, y: this._acLY(80) - 6, 'text-anchor': 'end' }, 'Bild %'));
+        svg.appendChild(mk('text', { class: 'axis-title', x: this._acLX(0), y: 258, 'text-anchor': 'start' }, 'dunkel'));
+        svg.appendChild(mk('text', { class: 'axis-title', x: this._acLX(50), y: 258, 'text-anchor': 'middle' }, 'Raumhelligkeit'));
+        svg.appendChild(mk('text', { class: 'axis-title', x: this._acLX(100), y: 258, 'text-anchor': 'end' }, 'hell'));
+
+        // Kennlinie
+        const pts = [[0, c.dark], [c.T, c.lit], [c.hi, c.max], [100, c.max]]
+            .map(p => `${this._acLX(p[0])},${this._acLY(p[1])}`).join(' ');
+        svg.appendChild(mk('polyline', { class: 'curve', points: pts }));
+
+        // Weißer Live-Punkt „du bist hier"
+        if (this._liveLight != null) {
+            const l = Math.max(0, Math.min(100, this._liveLight));
+            const b = this._ambientBriFor(l);
+            svg.appendChild(mk('line', { class: 'nowline', x1: this._acLX(l), y1: this._acLY(80), x2: this._acLX(l), y2: this._acLY(20) }));
+            svg.appendChild(mk('circle', { class: 'nowdot', cx: this._acLX(l), cy: this._acLY(b), r: 5 }));
+        }
+
+        // Anker-Handles
+        const anchors = [
+            { id: 'dark', l: 0, b: c.dark, col: 'var(--dark)' },
+            { id: 'lit', l: c.T, b: c.lit, col: 'var(--lit)' },
+            { id: 'max', l: c.hi, b: c.max, col: 'var(--max)' },
+        ];
+        for (const a of anchors) {
+            const g = mk('g', { class: 'handle', 'data-id': a.id });
+            g.appendChild(mk('circle', { class: 'hdot', cx: this._acLX(a.l), cy: this._acLY(a.b), r: 8, fill: a.col }));
+            g.appendChild(mk('text', { class: 'hlab', x: this._acLX(a.l), y: this._acLY(a.b) - 13, 'text-anchor': 'middle', fill: a.col }, Math.round(a.b)));
+            svg.appendChild(g);
+        }
+
+        // Chips (Höhen + Schwellen) + Live-Sensorwert
+        document.getElementById('ac-dark').textContent = Math.round(c.dark);
+        document.getElementById('ac-lit').textContent = Math.round(c.lit);
+        document.getElementById('ac-max').textContent = Math.round(c.max);
+        document.getElementById('ac-t').textContent = Math.round(c.T);
+        document.getElementById('ac-hi').textContent = Math.round(c.hi);
+        document.getElementById('ac-light').textContent =
+            this._liveLight != null ? this._liveLight : '–';
     }
 
     // ── Suche ─────────────────────────────────────────

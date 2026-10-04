@@ -28,6 +28,9 @@ app/tools/tv-token.txt
 # Testdaten
 app/exif_test/
 
+# featureconf-Doku (standortspezifisch, gehört nicht in public Repo)
+theframe_servicemenu_featureconf.md
+
 # Temp / Editor
 *.tmp
 *.swp

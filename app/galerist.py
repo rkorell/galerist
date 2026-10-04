@@ -18,6 +18,11 @@
 # Modified: 2026-08-24 - /api/start_frame: startet den ANDEREN Rahmen per SSH (Relais), Ziel aus frames-Config
 # Modified: 2026-09-19 - Ambient-Helligkeitsregelung: display_brightness folgt Senvolon-'light' (MQTT, 1:1 geklemmt), fail-safe
 # Modified: 2026-09-19 - Ambient in PWA steuerbar: Toggle + min/max in /api/settings GET+POST; Werte read-once beim Start, greifen nach Service-Neustart (kein Pro-Runde-Nachlesen)
+# Modified: 2026-09-19 - Ambient-Kennlinie entkoppelt (2-Punkt light_lo/hi -> dim_min/max, Anker 5->35 / 93->68) + Median-Glaettung; loest 1:1 ab (war zu dunkel)
+# Modified: 2026-09-20 - Ambient-Kennlinie 3-Anker (dim_dark bei 0, Knie light_t, dim_lit, dim_max) fuer eigenen Dunkel-Boden; /api/settings + PWA-Kurveneditor
+# Modified: 2026-09-20 - Ambient: Live-Sensor per WS an Editor (weisser Punkt), Live-Schalter (ambient_enable, laedt Kennlinie beim Einschalten neu), Loop laeuft immer (Kalibriermodus = Automatik aus)
+# Modified: 2026-09-20 - Ambient: Default light_hi 93->60 (93 war Ausreisser-Spitze, normaler Tag ~60)
+# Modified: 2026-10-04 - Bildwechsel auf Uhrzeit-Raster (Vielfache von interval ab Mitternacht) statt fortgezaehltem Timer; Rahmen laufen dadurch synchron, manuelles Blaettern kehrt ins Raster zurueck (Mindestabstand 60 s)
 
 import json
 import logging
@@ -64,6 +69,12 @@ _AMBIENT_MQTT_TOPIC = 'tele/senvolon/STATE'
 _AMBIENT_MQTT_FIELD = 'light'          # JSON-Schluessel im STATE-Payload
 _AMBIENT_POLL_SECONDS = 60             # Regeltakt
 _AMBIENT_DEADBAND = 3                  # erst ab dieser Differenz nachsetzen (Zappel-Schutz)
+_AMBIENT_MEDIAN_N = 5                  # gleitender Median ueber so viele Messwerte (Wolken-Glaettung)
+
+# Mindestabstand bis zum naechsten Rasterpunkt nach manuellem Blaettern (Sekunden).
+# Ohne ihn wuerde ein Tastendruck kurz vor einem Rasterpunkt das gerade geholte
+# Bild sofort wieder wegschalten; der betroffene Punkt wird dann uebersprungen.
+_SLOT_MIN_DELAY_SECONDS = 60
 
 
 # DEBUG-Instrumentierung — in gemeinsame Datei mit input_handler.
@@ -128,6 +139,12 @@ class GaleristApp:
         # Bildhelligkeit (Dimm-Overlay): 100 = klar, 20 = stark gedimmt. Live via WS,
         # persistiert in config.display_brightness (nur beim Speichern auf Platte).
         self._brightness: int = getattr(self.config, 'display_brightness', 100)
+        # Ambient-Regelung: Live-Schalter (per WS umschaltbar) + zuletzt gemessener
+        # Sensorwert (für den „du bist hier"-Punkt im Kurveneditor). Die Kennlinie-
+        # Parameter liegen in self._ambient_params (bei Start/Einschalten geladen).
+        self._ambient_enabled: bool = bool(getattr(self.config, 'ambient_brightness_enabled', True))
+        self._ambient_light: int | None = None
+        self._ambient_params: dict = self._load_ambient_params()
         # Voll-Schwarz-Overlay während der TV-Off-Zeit (Keep-shallow-Pulse bleiben unsichtbar)
         self._blackout: bool = False
         # Aktive FB-Akku-Warnung (Prozent, oder None). Roter Header in der Infobox,
@@ -366,49 +383,95 @@ class GaleristApp:
 
         threading.Thread(target=loop, daemon=True, name='TVKeepShallow').start()
 
+    def _load_ambient_params(self) -> dict:
+        """Die 5 Kennlinie-Parameter aus der Config lesen (bei Start + beim
+        Wieder-Einschalten der Automatik). Kein Pro-Runde-Nachlesen."""
+        return {
+            'dim_dark': int(getattr(self.config, 'ambient_dim_dark', 35)),
+            'light_t': int(getattr(self.config, 'ambient_light_t', 10)),
+            'dim_lit': int(getattr(self.config, 'ambient_dim_lit', 45)),
+            'light_hi': int(getattr(self.config, 'ambient_light_hi', 60)),
+            'dim_max': int(getattr(self.config, 'ambient_dim_max', 68)),
+        }
+
+    def _ambient_brightness_for(self, light: int) -> int:
+        """Sensorwert → Helligkeit über die 3-Anker-Kennlinie, geklemmt.
+
+        Anker: (0 → dim_dark) stockdunkel · (light_t → dim_lit) Zimmerlicht ·
+        (light_hi → dim_max) voller Tag. Rein lichtgesteuert (kein Uhrzeit)."""
+        p = self._ambient_params
+        dim_dark, light_t = p['dim_dark'], p['light_t']
+        dim_lit, light_hi, dim_max = p['dim_lit'], p['light_hi'], p['dim_max']
+        if light <= 0:
+            val = dim_dark
+        elif light >= light_hi:
+            val = dim_max
+        elif light <= light_t:
+            frac = light / light_t if light_t > 0 else 1.0
+            val = dim_dark + frac * (dim_lit - dim_dark)
+        else:
+            span = (light_hi - light_t) or 1
+            frac = (light - light_t) / span
+            val = dim_lit + frac * (dim_max - dim_lit)
+        lo = min(dim_dark, dim_lit, dim_max)
+        hi = max(dim_dark, dim_lit, dim_max)
+        return int(round(max(lo, min(hi, val))))
+
+    def set_ambient_enabled(self, value: bool):
+        """Automatik live an/aus (per WS aus der Kalibrier-PWA). Beim Einschalten
+        werden die Kennlinie-Parameter frisch geladen — so wirkt eine gespeicherte
+        Kalibrierung sofort, ohne Service-Neustart. Nicht persistiert (das macht
+        /api/settings beim Speichern)."""
+        self._ambient_enabled = bool(value)
+        if self._ambient_enabled:
+            self._ambient_params = self._load_ambient_params()
+        logger.info("Ambient-Automatik %s", "AN" if self._ambient_enabled else "AUS (Kalibrieren)")
+
     def _start_ambient_brightness(self):
-        """Regelt die Bildhelligkeit nach Umgebungslicht (Senvolon via MQTT).
+        """Umgebungslicht-Regelung (Senvolon via MQTT) + Live-Sensor für den Editor.
 
-        1:1-Kennlinie: display_brightness = light, geklemmt auf
-        [ambient_light_min, ambient_light_max]. Der Senvolon meldet 'light'
-        etwa im selben Wertebereich wie das Dimm-Overlay (20 = dunkel, 70 = Decke),
-        daher die direkte Übernahme.
+        Die Schleife läuft IMMER: sie holt den Sensorwert, schickt ihn per WS an
+        die Steuer-App (weißer „du bist hier"-Punkt im Kurveneditor) und WENDET die
+        Kennlinie nur an, wenn die Automatik AN ist (self._ambient_enabled).
 
-        Schalter und Grenzen (enabled/min/max) werden EINMAL beim Service-Start
-        gelesen — kein Pro-Runde-Nachlesen (unnötiger Overhead). PWA-Änderungen
-        greifen nach Service-Neustart (wie display_backend).
+        Ist die Automatik AUS (= Kalibriermodus), regelt sie nicht — dann steuert
+        der Editor den Schirm direkt (set_brightness), ohne dass etwas dagegenhält.
 
-        Läuft nur, solange das Display an sein soll. Bei jedem Fehler (MQTT nicht
-        erreichbar, kein Wert) bleibt die Helligkeit unverändert — die Autarkie
-        der Bildanzeige wird nicht angetastet. Kein Disk-Write (set_brightness
-        setzt live), der persistierte display_brightness bleibt der Startwert.
+        Glättung: gleitender Median (_AMBIENT_MEDIAN_N). Fehler (MQTT weg) →
+        Helligkeit unverändert, Autarkie gewahrt. Kein Disk-Write.
         """
-        if not getattr(self.config, 'ambient_brightness_enabled', True):
-            logger.info("Ambient-Helligkeitsregelung deaktiviert (Config)")
-            return
-
-        light_min = int(getattr(self.config, 'ambient_light_min', 20))
-        light_max = int(getattr(self.config, 'ambient_light_max', 70))
         client_id = f"galerist-ambient-{socket.gethostname()}"
 
         def loop():
             last_applied = None
+            samples = []
             while True:
+                # Im Kalibriermodus (Automatik aus) öfter fühlen, damit der weiße
+                # Punkt zügig folgt; im Regelbetrieb der normale Takt.
+                wait = _AMBIENT_POLL_SECONDS if self._ambient_enabled else 10
                 try:
-                    # Nur regeln, wenn das Display an ist (oder Zustand noch unbekannt).
-                    if self.display_control.display_on is not False:
-                        light = ambient_light.fetch_light(
-                            _AMBIENT_MQTT_HOST, _AMBIENT_MQTT_PORT,
-                            _AMBIENT_MQTT_TOPIC, _AMBIENT_MQTT_FIELD, client_id)
-                        if light is not None:
-                            target = max(light_min, min(light_max, light))
+                    light = ambient_light.fetch_light(
+                        _AMBIENT_MQTT_HOST, _AMBIENT_MQTT_PORT,
+                        _AMBIENT_MQTT_TOPIC, _AMBIENT_MQTT_FIELD, client_id)
+                    if light is not None:
+                        self._ambient_light = light
+                        self._broadcast({'type': 'ambient_light', 'light': light})
+                        if self._ambient_enabled and self.display_control.display_on is not False:
+                            samples.append(light)
+                            if len(samples) > _AMBIENT_MEDIAN_N:
+                                samples.pop(0)
+                            smoothed = sorted(samples)[len(samples) // 2]  # Median
+                            target = self._ambient_brightness_for(smoothed)
                             if last_applied is None or abs(target - last_applied) >= _AMBIENT_DEADBAND:
                                 self.set_brightness(target)
                                 last_applied = target
-                                logger.info("Ambient: light=%d → Helligkeit %d", light, target)
+                                logger.info("Ambient: light=%d (med %d) → Helligkeit %d", light, smoothed, target)
+                        else:
+                            samples = []
+                            last_applied = None
                 except Exception as e:
                     logger.error("Ambient-Regelung Fehler: %s", e)
-                time.sleep(_AMBIENT_POLL_SECONDS)
+                time.sleep(wait)
 
         threading.Thread(target=loop, daemon=True, name='AmbientBrightness').start()
 
@@ -579,45 +642,72 @@ class GaleristApp:
         """Automatischen Bildwechsel starten."""
         self._schedule_next()
 
-    def _schedule_next(self):
-        """Timer für nächsten Bildwechsel setzen (ersetzt laufenden Timer)."""
+    @staticmethod
+    def _slot_delay(interval: int, min_delay: float = 0.0) -> float:
+        """Sekunden bis zum nächsten Rasterpunkt.
+
+        Das Raster sind die Vielfachen von `interval`, gezählt ab Mitternacht
+        lokaler Zeit — der Zeitpunkt wird also aus der Uhr berechnet und nicht
+        vom letzten Wechsel fortgezählt. Zwei Rahmen mit gleichem Intervall
+        treffen dadurch zwangsläufig dieselben Zeitpunkte, unabhängig von
+        Startzeit, Neustart oder manuellem Blättern (bei 900 s ist das Raster
+        :00/:15/:30/:45). Punkte, die näher als `min_delay` liegen, werden
+        übersprungen.
+        """
+        if interval <= 0:
+            return max(float(interval), min_delay)
+        now = time.time()
+        lt = time.localtime(now)
+        since_midnight = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec + (now % 1)
+        delay = interval - (since_midnight % interval)
+        while delay < min_delay:
+            delay += interval
+        return delay
+
+    def _schedule_next(self, min_delay: float = 0.0) -> float:
+        """Timer für nächsten Bildwechsel setzen (ersetzt laufenden Timer).
+
+        Gibt die gewählte Wartezeit zurück, damit der Preload sich daran
+        ausrichten kann.
+        """
         if self._timer:
             self._timer.cancel()
         interval = self.config.display_interval_seconds
-        _dbg('schedule_next interval=' + str(interval))  # DEBUG
-        self._timer = threading.Timer(interval, self._rotation_tick)
+        delay = self._slot_delay(interval, min_delay)
+        _dbg('schedule_next interval=' + str(interval) + ' delay=' + str(round(delay, 1)))  # DEBUG
+        self._timer = threading.Timer(delay, self._rotation_tick)
         self._timer.daemon = True
         self._timer.start()
+        return delay
 
     def _rotation_tick(self):
         """Timer-Callback: Bild wechseln wenn nicht pausiert."""
         _dbg('tick paused=' + str(self.paused) + ' display_on=' + str(self.display_control.display_on))  # DEBUG
+        delay = self._schedule_next()
         if not self.paused and self.display_control.display_on:
             self.advance(1)
-            # Nächstes Bild vorladen (bei ausreichend langem Intervall)
-            self._preload_next()
-        self._schedule_next()
+            # Nächstes Bild vorladen (bei ausreichend langer Restzeit)
+            self._preload_next(delay)
 
-    def _preload_next(self):
+    def _preload_next(self, delay_until_switch: float):
         """Dem Browser das nächste Bild zum Vorladen ankündigen."""
         if not self.playlist:
             return
-        interval = self.config.display_interval_seconds
-        if interval < 30:
-            return  # Zu kurzes Intervall, Preload lohnt nicht
+        if delay_until_switch < 30:
+            return  # Zu kurze Restzeit, Preload lohnt nicht
         with self._lock:
             next_index = (self.current_index + 1) % len(self.playlist)
             next_file = self.playlist[next_index]
         # Preload 10s vor dem nächsten Wechsel senden
-        delay = max(interval - 10, interval * 0.8)
+        delay = max(delay_until_switch - 10, delay_until_switch * 0.8)
         threading.Timer(delay, lambda: self._broadcast({
             'type': 'preload',
             'src': f'/images/{next_file}'
         })).start()
 
     def _reset_timer(self):
-        """Timer nach manuellem Blättern zurücksetzen."""
-        self._schedule_next()
+        """Timer nach manuellem Blättern auf den nächsten Rasterpunkt setzen."""
+        self._schedule_next(_SLOT_MIN_DELAY_SECONDS)
 
     # ── Betriebsstunden ───────────────────────────────────────
 
@@ -802,8 +892,11 @@ class GaleristApp:
                 'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
                 'display_brightness': self._brightness,
                 'ambient_brightness_enabled': getattr(self.config, 'ambient_brightness_enabled', True),
-                'ambient_light_min': getattr(self.config, 'ambient_light_min', 20),
-                'ambient_light_max': getattr(self.config, 'ambient_light_max', 70),
+                'ambient_dim_dark': getattr(self.config, 'ambient_dim_dark', 35),
+                'ambient_light_t': getattr(self.config, 'ambient_light_t', 10),
+                'ambient_dim_lit': getattr(self.config, 'ambient_dim_lit', 45),
+                'ambient_light_hi': getattr(self.config, 'ambient_light_hi', 60),
+                'ambient_dim_max': getattr(self.config, 'ambient_dim_max', 68),
             })
 
         @self.app.route('/api/settings', methods=['POST'])
@@ -844,22 +937,31 @@ class GaleristApp:
             if 'ambient_brightness_enabled' in data:
                 updates['ambient_brightness_enabled'] = bool(data['ambient_brightness_enabled'])
 
-            if 'ambient_light_min' in data:
-                val = int(data['ambient_light_min'])
-                if 20 <= val <= 100:
-                    updates['ambient_light_min'] = val
+            # Kennlinien-Anker: drei Helligkeitswerte (20–100) + Knie-Lichtwert (1–92)
+            for key in ('ambient_dim_dark', 'ambient_dim_lit', 'ambient_dim_max'):
+                if key in data:
+                    val = int(data[key])
+                    if 20 <= val <= 100:
+                        updates[key] = val
+            for key in ('ambient_light_t', 'ambient_light_hi'):
+                if key in data:
+                    val = int(data[key])
+                    if 1 <= val <= 100:
+                        updates[key] = val
 
-            if 'ambient_light_max' in data:
-                val = int(data['ambient_light_max'])
-                if 20 <= val <= 100:
-                    updates['ambient_light_max'] = val
-
-            # Untergrenze darf die Obergrenze nicht ueberschreiten
-            lo = updates.get('ambient_light_min', getattr(self.config, 'ambient_light_min', 20))
-            hi = updates.get('ambient_light_max', getattr(self.config, 'ambient_light_max', 70))
-            if lo > hi:
-                updates.pop('ambient_light_min', None)
-                updates.pop('ambient_light_max', None)
+            # Reihenfolge Helligkeiten erzwingen: dim_dark <= dim_lit <= dim_max
+            dark = updates.get('ambient_dim_dark', getattr(self.config, 'ambient_dim_dark', 35))
+            lit = updates.get('ambient_dim_lit', getattr(self.config, 'ambient_dim_lit', 45))
+            mx = updates.get('ambient_dim_max', getattr(self.config, 'ambient_dim_max', 68))
+            if not (dark <= lit <= mx):
+                for key in ('ambient_dim_dark', 'ambient_dim_lit', 'ambient_dim_max'):
+                    updates.pop(key, None)
+            # Reihenfolge Schwellen erzwingen: light_t < light_hi
+            t = updates.get('ambient_light_t', getattr(self.config, 'ambient_light_t', 10))
+            hi = updates.get('ambient_light_hi', getattr(self.config, 'ambient_light_hi', 60))
+            if not (t < hi):
+                updates.pop('ambient_light_t', None)
+                updates.pop('ambient_light_hi', None)
 
             if updates:
                 self.config.update_many(updates)
@@ -873,8 +975,11 @@ class GaleristApp:
                 'display_backend': getattr(self.config, 'display_backend', 'wlr-randr'),
                 'display_brightness': self._brightness,
                 'ambient_brightness_enabled': getattr(self.config, 'ambient_brightness_enabled', True),
-                'ambient_light_min': getattr(self.config, 'ambient_light_min', 20),
-                'ambient_light_max': getattr(self.config, 'ambient_light_max', 70),
+                'ambient_dim_dark': getattr(self.config, 'ambient_dim_dark', 35),
+                'ambient_light_t': getattr(self.config, 'ambient_light_t', 10),
+                'ambient_dim_lit': getattr(self.config, 'ambient_dim_lit', 45),
+                'ambient_light_hi': getattr(self.config, 'ambient_light_hi', 60),
+                'ambient_dim_max': getattr(self.config, 'ambient_dim_max', 68),
             }})
 
         @self.app.route('/api/status')
@@ -981,6 +1086,8 @@ class GaleristApp:
                     action = msg.get('action', '')
                     if action == 'set_brightness':
                         self.set_brightness(msg.get('value'))
+                    elif action == 'ambient_enable':
+                        self.set_ambient_enabled(msg.get('value', True))
                     elif action == 'search':
                         self._do_search_count(ws, msg.get('kuenstler', ''), msg.get('wort', ''))
                     elif action == 'search_show':

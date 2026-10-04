@@ -13,6 +13,9 @@
 <!-- Modified: 2026-08-24 - Button-Farben vereinheitlicht: nur Speichern blau, Rest neutral; Service-Gruppe per Abstand abgesetzt -->
 <!-- Modified: 2026-08-24 - Buttons alle grau; Reihenfolge Stoppen vor Neu-starten; Stop duenn rot umrandet, beide Start-Buttons duenn gruen; Gruppen-Abstaende -->
 <!-- Modified: 2026-09-19 - Auto-Helligkeit: Toggle + min/max-Grenzen im Einstellungen-Panel -->
+<!-- Modified: 2026-09-20 - Auto-Helligkeit: Kurveneditor (3-Anker-Kennlinie) statt min/max-Slider, ausklappbare Kalibrierung -->
+<!-- Modified: 2026-09-20 - Kurveneditor: y 20-80, x-Wortachse Raumhelligkeit, weisser Live-Punkt, Chips+Schwellen, Vorschau-Slider raus; Overlay-Dauer-Notiz -->
+<!-- Modified: 2026-09-20 - Finale: Chips 1-zeilig (dunkel/Licht ab/Licht/Tag ab/Tag), 3 Erklaerzeilen + Live-Sensorzahl, Helligkeitsregler-Notiz, responsive (Landscape) -->
 <html lang="de">
 <head>
     <meta charset="UTF-8">
@@ -87,6 +90,9 @@
             flex: 1; display: flex; flex-direction: column; align-items: center;
             padding: 1.25rem 1rem; gap: 1.25rem;
             max-width: 480px; margin: 0 auto; width: 100%;
+        }
+        @media (orientation: landscape) {
+            .main { max-width: 760px; }
         }
 
         /* === Vorschaubild (bildschirmbreit) === */
@@ -167,6 +173,38 @@
         .field { margin-bottom: 1.25rem; }
         .field:last-child { margin-bottom: 0; }
         .field-disabled { opacity: 0.4; pointer-events: none; }
+
+        /* === Auto-Helligkeit: Kurveneditor === */
+        .ambient-cal { --dark:#8a63d2; --lit:#4a90d9; --max:#3fb08a; }
+        .cal-summary { list-style:none; cursor:pointer; font-size:0.8rem; color:var(--text-muted);
+            font-weight:500; padding:0.2rem 0; display:flex; align-items:center; gap:0.4rem; user-select:none; }
+        .cal-summary::-webkit-details-marker { display:none; }
+        .cal-summary::before { content:'\25B6'; font-size:0.6rem; transition:transform var(--transition-normal); }
+        .ambient-cal[open] .cal-summary::before { transform:rotate(90deg); }
+        .ambient-plot-wrap { margin-top:0.6rem; }
+        #ambient-plot { width:100%; height:auto; display:block; touch-action:none; }
+        #ambient-plot .grid { stroke:#20202c; stroke-width:1; }
+        #ambient-plot .axis-lab { fill:var(--text-muted); font-size:9px; }
+        #ambient-plot .axis-title { fill:var(--text-secondary); font-size:10px; }
+        #ambient-plot .curve { fill:none; stroke:var(--accent); stroke-width:2.5;
+            filter:drop-shadow(0 0 4px var(--accent-glow)); stroke-linejoin:round; }
+        #ambient-plot .nowline { stroke:var(--text-secondary); stroke-width:1; stroke-dasharray:3 3; opacity:.7; }
+        #ambient-plot .nowdot { fill:#fff; stroke:var(--accent); stroke-width:2; }
+        #ambient-plot .handle { cursor:grab; }
+        #ambient-plot .hdot { stroke:var(--bg-card); stroke-width:2; }
+        #ambient-plot .hlab { font-size:9px; font-weight:600; }
+        .ambient-chips { display:flex; gap:0.5rem; margin-top:0.8rem; }
+        .ambient-chips .chip { flex:1 1 0; min-width:0; background:var(--bg-secondary);
+            border:1px solid var(--border-color); border-radius:9px; padding:0.45rem 0.3rem; text-align:center; }
+        .ambient-chips .chip .k { font-size:0.6rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.03em; }
+        .ambient-chips .chip .v { font-size:1.05rem; font-weight:700; margin-top:0.1rem; }
+        .ambient-chips .chip .k { font-size:0.55rem; }
+        .ambient-chips .chip.dark .v { color:var(--dark); }
+        .ambient-chips .chip.lit .v { color:var(--lit); }
+        .ambient-chips .chip.max .v { color:var(--max); }
+        .ambient-chips .chip.t .v, .ambient-chips .chip.h .v { color:var(--text-secondary); }
+        .ambient-expl { margin-top:0.9rem; font-size:0.8rem; line-height:1.9; color:var(--text-secondary); }
+        .ambient-expl b { color:var(--text-primary); font-weight:600; }
         .field-label {
             display: block; font-size: 0.8rem; color: var(--text-muted);
             margin-bottom: 0.4rem; font-weight: 500;
@@ -356,13 +394,14 @@
                     <span class="field-label">Overlay-Dauer</span>
                     <div class="field-value" id="overlay-display">10 Sek</div>
                     <input type="range" id="setting-overlay-duration" min="0" max="20" step="1" value="10">
+                    <div class="radio-note">Darstellungszeit der Infobox (Künstler, Titel). 0 = bleibt stehen.</div>
                 </div>
 
                 <div class="field" id="brightness-field">
                     <span class="field-label">Helligkeit</span>
                     <div class="field-value" id="brightness-display">100 %</div>
                     <input type="range" id="setting-brightness" min="20" max="100" step="5" value="100">
-                    <div class="radio-note">Wirkt sofort; „Speichern" merkt den Wert dauerhaft.</div>
+                    <div class="radio-note">justiert die Konfig-Parameter</div>
                 </div>
 
                 <div class="field">
@@ -370,25 +409,27 @@
                         <input type="checkbox" id="setting-ambient-enabled">
                         Auto-Helligkeit <span class="radio-hint">— folgt dem Raumlicht</span>
                     </label>
-                    <div class="radio-note">Ist die Automatik an, wird die Helligkeit oben automatisch geregelt; der manuelle Regler ruht. Änderung wirkt erst nach „Service neu starten".</div>
+                    <div class="radio-note">Automatik an: die Bildhelligkeit folgt dem Raumlicht (der manuelle Regler ruht). Zum Kalibrieren die Automatik ausschalten.</div>
                 </div>
 
-                <div class="field" id="ambient-range-field">
-                    <span class="field-label">Auto-Helligkeit: Grenzen</span>
-                    <div class="slider-row">
-                        <div class="field">
-                            <span class="field-label">dunkel (min)</span>
-                            <div class="field-value" id="ambient-min-display">20 %</div>
-                            <input type="range" id="setting-ambient-min" min="20" max="100" step="5" value="20">
-                        </div>
-                        <div class="field">
-                            <span class="field-label">hell (max)</span>
-                            <div class="field-value" id="ambient-max-display">70 %</div>
-                            <input type="range" id="setting-ambient-max" min="20" max="100" step="5" value="70">
-                        </div>
+                <details class="field ambient-cal" id="ambient-cal" open>
+                    <summary class="cal-summary">Kalibrierung</summary>
+                    <div class="ambient-plot-wrap">
+                        <svg id="ambient-plot" viewBox="0 0 380 264" role="img" aria-label="Kennlinie Raumhelligkeit zu Bildhelligkeit"></svg>
                     </div>
-                    <div class="radio-note">Unter-/Obergrenze der automatischen Dimmung. „Speichern" merkt die Werte; sie wirken nach „Service neu starten".</div>
-                </div>
+                    <div class="ambient-chips">
+                        <div class="chip dark"><div class="k">dunkel</div><div class="v" id="ac-dark">35</div></div>
+                        <div class="chip t"><div class="k">Licht ab</div><div class="v" id="ac-t">12</div></div>
+                        <div class="chip lit"><div class="k">Licht</div><div class="v" id="ac-lit">45</div></div>
+                        <div class="chip h"><div class="k">Tag ab</div><div class="v" id="ac-hi">60</div></div>
+                        <div class="chip max"><div class="k">Tag</div><div class="v" id="ac-max">68</div></div>
+                    </div>
+                    <div class="ambient-expl">
+                        🟣 🔵 🟢 (vertikal): Helligkeitsregelung<br>
+                        🔵 🟢 (horizontal): Grenzwertfestlegung<br>
+                        Raumhelligkeit aktuell: <b id="ac-light">–</b>
+                    </div>
+                </details>
 
                 <div class="field-row">
                     <div class="field">
