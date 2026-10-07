@@ -3,6 +3,9 @@ galerie/
 
 # Credentials & Config
 app/config.json
+admin/db_connect.php
+admin/aufraeumen.env
+app/static/js/local_config.js
 
 # Claude Code
 CLAUDE.md

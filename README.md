@@ -1,6 +1,6 @@
 # Galerist — Digitaler Bilderrahmen
 
-*Stand: 2026-08-28*
+*Stand: 2026-10-07*
 
 Ersatz für proprietäre digitale Bilderrahmen wie den Netgear Meural Canvas II auf einem Linux-Gerät mit Wayland. Zeigt eine kuratierte Bildersammlung im Vollbild, blendet Metadaten als Museums-Schild ein, lässt sich optional per Bluetooth-HID-Eingabegerät steuern. Liest die Anzeige-Metadaten direkt aus IPTC/XMP der JPEG-Dateien — **autark zur Laufzeit**, keine Datenbank, keine Netzwerk-Abhängigkeit.
 
@@ -81,6 +81,10 @@ Mehrere autarke Rahmen lassen sich aus **einer** Web-App bedienen: ein Rahmen-W�
 ### Suche
 
 Ein Suchpanel filtert die Sammlung nach **Künstler** (Autocomplete über `/api/artists`) und/oder freiem **Suchwort**. Die Treffermenge wird angezeigt, bevor in die Ergebnisse gesprungen wird.
+
+### Bild aus der Galerie entfernen
+
+Ein Knopf unter der Bildnavigation markiert das gezeigte Bild zum Löschen (Rückfrage mit Titel und Künstler). Markiert wird nur — ein Aufräumlauf auf dem Archiv-Rechner entfernt die Dateien später aus dem Zentralarchiv und von allen Rahmen und setzt das Bild dauerhaft auf „verworfen", so dass künftige Crawls es nicht erneut einspielen. Der Anzeige-Dienst auf den Rahmen ist daran nicht beteiligt (Autarkie). Die Adresse des Endpunkts steht in `static/js/local_config.js` (device-local, nicht im Repo); fehlt die Datei, bleibt der Knopf verborgen.
 
 ### Service-Steuerung
 

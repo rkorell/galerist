@@ -16,12 +16,16 @@
 // Modified: 2026-09-20 - Auto-Helligkeit: interaktiver Kurveneditor (3-Anker light->Helligkeit) mit Drag + Vorschau-Slider; loest min/max-Slider ab
 // Modified: 2026-09-20 - Kurveneditor: 5 freie Werte (auch Schwellen), y 20-80, x-Wortachse, weisser Live-Punkt (WS ambient_light), Live-Schalter, Kalibriermodus treibt Schirm; Vorschau-Slider raus
 // Modified: 2026-09-20 - Helligkeitsregler justiert rueckwaerts die Kennlinie (naechster Anker); Live-Sensorzahl in Erklaerung; Chips 1-zeilig (dunkel/Licht ab/Licht/Tag ab/Tag); default light_hi 60
+// Modified: 2026-10-06 - Knopf "Bild aus der Galerie entfernen": setzt den Loeschmarker per POST auf remove.php (Adresse aus local_config.js), merkt sich Dateiname + Metadaten des gezeigten Bildes
 
 class GaleristControl {
     constructor(frames) {
         this.ws = null;
         this.reconnectDelay = 2000;
         this.previewEl = document.getElementById('preview-image');
+        // Aktuell gezeigtes Bild (Dateiname + Metadaten) — Grundlage fuer das Verwerfen
+        this.currentFile = '';
+        this.currentMeta = {};
         // Rahmen-Liste kommt aus config.json (via /api/frames). Die App steuert EINEN
         // Rahmen (nie beide zugleich). Fallback: nur der ausliefernde Rahmen.
         this.frames = (frames && frames.length)
@@ -34,6 +38,7 @@ class GaleristControl {
         this._initSettings();
         this._initTheme();
         this._initSearch();
+        this._initRemoveButton();
         this._loadSettings();
     }
 
@@ -147,6 +152,10 @@ class GaleristControl {
         switch (msg.type) {
             case 'show_image':
                 if (msg.src && this.previewEl) this.previewEl.src = msg.src;
+                // Dateiname aus '/images/<datei>' — Schluessel fuer das Verwerfen
+                this.currentFile = msg.src
+                    ? decodeURIComponent(msg.src.replace(/^\/images\//, '')) : '';
+                this.currentMeta = msg.metadata || {};
                 this._updateFilmstrip(msg.strip);
                 this._updatePreviewInfo(msg.metadata, msg.index, msg.total);
                 break;
@@ -688,6 +697,47 @@ class GaleristControl {
         if (dl) dl.innerHTML = '';
         const card = document.getElementById('search-card');
         if (card && card.open) this._loadArtists();
+    }
+
+    // ── Bild verwerfen ───────────────────────────────
+
+    _initRemoveButton() {
+        const btn = document.getElementById('btn-remove-image');
+        if (!btn) return;
+        // Ohne konfigurierte Endpunkt-Adresse (static/js/local_config.js) bleibt der
+        // Knopf verborgen — besser kein Knopf als einer, der ins Leere greift.
+        const url = window.GALERIST_ARCHIVE_URL;
+        if (!url) return;
+        btn.style.display = '';
+
+        btn.addEventListener('click', () => {
+            if (!this.currentFile) { this._showStatus('Kein Bild geladen'); return; }
+
+            const m = this.currentMeta || {};
+            const titel = m.titel ? '„' + m.titel + '“' : this.currentFile;
+            const wer = m.kuenstler ? ' (' + m.kuenstler + ')' : '';
+            if (!confirm(titel + wer + ' endgueltig aus beiden Rahmen und dem Archiv '
+                         + 'entfernen?\n\nDas Bild wird heute Nacht geloescht.')) return;
+
+            btn.disabled = true;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dateiname: this.currentFile })
+            })
+                .then(r => r.json().then(d => ({ ok: r.ok, d: d })))
+                .then(res => {
+                    if (res.ok && res.d.status === 'markiert') {
+                        this._showStatus('Markiert — wird heute Nacht entfernt', true);
+                    } else if (res.ok && res.d.status === 'schon_markiert') {
+                        this._showStatus('War schon markiert', true);
+                    } else {
+                        this._showStatus(res.d.meldung || 'Markieren fehlgeschlagen');
+                    }
+                })
+                .catch(() => { this._showStatus('Archiv nicht erreichbar'); })
+                .finally(() => { btn.disabled = false; });
+        });
     }
 
     // ── Status ───────────────────────────────────────
